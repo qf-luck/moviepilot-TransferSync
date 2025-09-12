@@ -79,76 +79,141 @@ class TransferSync(_PluginBase):
     _lock = threading.Lock()
 
     def init_plugin(self, config: dict = None):
-        """初始化插件"""
+        """
+        初始化插件
+        """
         if config:
             self._enabled = config.get("enabled", False)
-            
-            # 处理copy_paths：支持字符串（多行）或列表格式
-            copy_paths_config = config.get("copy_paths", "")
-            if isinstance(copy_paths_config, str):
-                self._copy_paths = [path.strip() for path in copy_paths_config.split('\n') if path.strip()]
-            elif isinstance(copy_paths_config, list):
-                self._copy_paths = copy_paths_config
-            else:
-                self._copy_paths = []
-            
+
+            # 基础配置
+            self._copy_paths = self._parse_paths(config.get("copy_paths", ""))
             self._enable_incremental = config.get("enable_incremental", False)
             self._incremental_cron = config.get("incremental_cron", "0 */6 * * *")
             self._enable_full_sync = config.get("enable_full_sync", False)
             self._full_sync_cron = config.get("full_sync_cron", "0 2 * * 0")
             self._enable_notifications = config.get("enable_notifications", False)
-            self._notification_channels = config.get("notification_channels", [])
-            
-            # 安全地处理枚举值
+            self._notification_channels = self._parse_list(config.get("notification_channels", ""))
+
+            # 高级配置
             try:
-                self._sync_strategy = SyncStrategy(config.get("sync_strategy", SyncStrategy.COPY.value))
+                self._sync_strategy = SyncStrategy(config.get("sync_strategy", "copy"))
             except ValueError:
                 self._sync_strategy = SyncStrategy.COPY
                 
             try:
-                self._sync_mode = SyncMode(config.get("sync_mode", SyncMode.IMMEDIATE.value))
+                self._sync_mode = SyncMode(config.get("sync_mode", "immediate"))
             except ValueError:
                 self._sync_mode = SyncMode.IMMEDIATE
-            
+                
             self._max_depth = config.get("max_depth", -1)
-            self._file_filters = config.get("file_filters", [])
-            self._exclude_patterns = config.get("exclude_patterns", [])
+            self._file_filters = self._parse_list(config.get("file_filters", ""))
+            self._exclude_patterns = self._parse_list(config.get("exclude_patterns", ""))
             self._max_file_size = config.get("max_file_size", 0)
             self._min_file_size = config.get("min_file_size", 0)
             self._enable_progress = config.get("enable_progress", True)
             self._max_workers = config.get("max_workers", 4)
             self._batch_size = config.get("batch_size", 100)
-            
-            # 处理触发事件配置
+
+            # 事件触发配置
             trigger_events_config = config.get("trigger_events", [])
-            if trigger_events_config:
-                event_values = trigger_events_config if isinstance(trigger_events_config, list) else [trigger_events_config]
-                try:
-                    self._trigger_events = [TriggerEvent(val) for val in event_values if self._is_valid_event(val)]
-                except Exception:
-                    self._trigger_events = [TriggerEvent.TRANSFER_COMPLETE]
+            if isinstance(trigger_events_config, list):
+                # 直接处理列表格式（来自UI）
+                self._trigger_events = [TriggerEvent(val) for val in trigger_events_config if self._is_valid_event(val)]
+            elif isinstance(trigger_events_config, str) and trigger_events_config:
+                # 处理字符串格式（向后兼容）
+                event_values = self._parse_list(trigger_events_config)
+                self._trigger_events = [TriggerEvent(val) for val in event_values if self._is_valid_event(val)]
             else:
                 self._trigger_events = [TriggerEvent.TRANSFER_COMPLETE]
-            
-            self._event_conditions = config.get("event_conditions", {})
 
-        # 初始化验证器和同步操作器
+            # 事件过滤条件
+            self._event_conditions = self._parse_event_conditions(config.get("event_conditions", ""))
+
+            # 验证配置
+            self._validate_config()
+
+        # 初始化服务辅助类
+        self._notification_helper = NotificationHelper()
+        self._mediaserver_helper = MediaServerHelper()
+
+        # 初始化同步操作器
         try:
-            self._validator = ConfigValidator()
             self._sync_ops = SyncOperations(self._get_config_dict())
         except Exception as e:
-            logger.error(f"初始化插件组件失败: {str(e)}")
-            self._validator = None
+            logger.error(f"初始化同步操作器失败: {str(e)}")
             self._sync_ops = None
-        
-        # 启用插件时注册事件监听
+
+        # 启用插件时的额外初始化
         if self._enabled:
             try:
+                # 注册事件监听器
                 self._register_event_listeners()
+                # 设置定时任务
                 self._setup_scheduler()
             except Exception as e:
                 logger.error(f"启用插件失败: {str(e)}")
                 self._enabled = False
+                
+    def _parse_paths(self, paths_str: str) -> List[str]:
+        """解析路径配置"""
+        if isinstance(paths_str, str):
+            return [p.strip() for p in paths_str.split('\n') if p.strip()]
+        return paths_str or []
+
+    def _parse_list(self, list_str: str, separator: str = ',') -> List[str]:
+        """解析列表配置"""
+        if isinstance(list_str, str):
+            return [p.strip() for p in list_str.split(separator) if p.strip()]
+        return list_str or []
+        
+    def _parse_event_conditions(self, conditions_str: str) -> Dict[str, Any]:
+        """解析事件过滤条件配置"""
+        if isinstance(conditions_str, str) and conditions_str.strip():
+            try:
+                # 简单的键值对解析，格式: event_type:condition=value,event_type2:condition=value
+                conditions = {}
+                pairs = conditions_str.split(',')
+                for pair in pairs:
+                    if ':' in pair:
+                        event_type, condition = pair.split(':', 1)
+                        conditions[event_type.strip()] = condition.strip()
+                return conditions
+            except Exception as e:
+                logger.error(f"解析事件条件失败: {str(e)}")
+                return {}
+        return conditions_str if isinstance(conditions_str, dict) else {}
+
+    def _validate_config(self):
+        """验证配置的基本有效性"""
+        try:
+            # 验证路径
+            if not self._copy_paths:
+                logger.warning("未配置同步目标路径")
+            
+            # 验证Cron表达式
+            if self._enable_incremental and self._incremental_cron:
+                try:
+                    CronTrigger.from_crontab(self._incremental_cron)
+                except Exception as e:
+                    logger.error(f"增量同步Cron表达式无效: {e}")
+                    self._enable_incremental = False
+                    
+            if self._enable_full_sync and self._full_sync_cron:
+                try:
+                    CronTrigger.from_crontab(self._full_sync_cron)
+                except Exception as e:
+                    logger.error(f"全量同步Cron表达式无效: {e}")
+                    self._enable_full_sync = False
+                    
+            # 验证数值配置
+            if self._max_workers < 1:
+                self._max_workers = 4
+            if self._batch_size < 1:
+                self._batch_size = 100
+                
+            logger.info("配置验证完成")
+        except Exception as e:
+            logger.error(f"配置验证失败: {str(e)}")
 
     def get_state(self) -> bool:
         """获取插件状态"""
