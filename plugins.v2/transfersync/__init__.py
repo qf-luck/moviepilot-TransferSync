@@ -394,34 +394,8 @@ class TransferSync(_PluginBase):
                 logger.warning("远程同步缺少参数")
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """获取插件配置表单"""
-        try:
-            # 获取事件选项
-            event_options = [{"title": name, "value": value} 
-                            for value, name in TriggerEvent.get_display_names().items()]
-            
-            # 获取同步策略选项
-            strategy_options = [
-                {"title": "复制", "value": SyncStrategy.COPY.value},
-                {"title": "移动", "value": SyncStrategy.MOVE.value},
-                {"title": "硬链接", "value": SyncStrategy.HARDLINK.value},
-                {"title": "软链接", "value": SyncStrategy.SOFTLINK.value}
-            ]
-            
-            # 获取同步模式选项
-            mode_options = [
-                {"title": "立即同步", "value": SyncMode.IMMEDIATE.value},
-                {"title": "批量同步", "value": SyncMode.BATCH.value},
-                {"title": "队列同步", "value": SyncMode.QUEUE.value}
-            ]
-        except Exception as e:
-            logger.error(f"获取表单选项失败: {str(e)}")
-            # 提供默认选项
-            event_options = [{"title": "整理完成", "value": "transfer.complete"}]
-            strategy_options = [{"title": "复制", "value": "copy"}]
-            mode_options = [{"title": "立即同步", "value": "immediate"}]
-
-        elements = [
+        """拼装插件配置页面，需要返回两块数据：1、页面配置；2、数据结构"""
+        return [
             {
                 'component': 'VForm',
                 'content': [
@@ -437,7 +411,7 @@ class TransferSync(_PluginBase):
                                         'props': {
                                             'model': 'enabled',
                                             'label': '启用插件',
-                                            'hint': '开启后将监听选定的事件类型并自动同步文件',
+                                            'hint': '开启后插件将处于激活状态',
                                             'persistent-hint': True
                                         }
                                     }
@@ -457,10 +431,10 @@ class TransferSync(_PluginBase):
                                         'props': {
                                             'model': 'copy_paths',
                                             'label': '同步目标路径',
-                                            'placeholder': '每行一个路径，支持多个目标路径',
-                                            'hint': '文件将被同步到这些目录中',
+                                            'placeholder': '输入要同步到的目标路径，每行一个\n示例：\n/mnt/backup1\n/mnt/backup2',
+                                            'hint': '整理完成后将内容复制到这些路径，每行一个路径',
                                             'persistent-hint': True,
-                                            'rows': 3
+                                            'rows': 4
                                         }
                                     }
                                 ]
@@ -475,14 +449,11 @@ class TransferSync(_PluginBase):
                                 'props': {'cols': 12, 'md': 6},
                                 'content': [
                                     {
-                                        'component': 'VSelect',
+                                        'component': 'VSwitch',
                                         'props': {
-                                            'model': 'trigger_events',
-                                            'label': '触发事件',
-                                            'multiple': True,
-                                            'chips': True,
-                                            'items': event_options,
-                                            'hint': '选择触发同步的事件类型',
+                                            'model': 'enable_incremental',
+                                            'label': '启用增量同步',
+                                            'hint': '定时增量同步新增或修改的文件',
                                             'persistent-hint': True
                                         }
                                     }
@@ -493,12 +464,84 @@ class TransferSync(_PluginBase):
                                 'props': {'cols': 12, 'md': 6},
                                 'content': [
                                     {
-                                        'component': 'VSelect',
+                                        'component': 'VTextField',
                                         'props': {
-                                            'model': 'sync_strategy',
-                                            'label': '同步策略',
-                                            'items': strategy_options,
-                                            'hint': '选择文件同步方式',
+                                            'model': 'incremental_cron',
+                                            'label': '增量同步时间',
+                                            'placeholder': '0 */6 * * *',
+                                            'hint': '使用Cron表达式，默认每6小时执行一次',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 6},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enable_full_sync',
+                                            'label': '启用全量同步',
+                                            'hint': '定时全量同步所有整理后的文件',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 6},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'full_sync_cron',
+                                            'label': '全量同步时间',
+                                            'placeholder': '0 2 * * 0',
+                                            'hint': '使用Cron表达式，默认每周日凌晨2点执行',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 6},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enable_notifications',
+                                            'label': '启用通知推送',
+                                            'hint': '同步完成后发送通知消息',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 6},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'notification_channels',
+                                            'label': '通知渠道',
+                                            'placeholder': '渠道1,渠道2',
+                                            'hint': '指定发送通知的渠道，多个用逗号分隔，留空则发送到所有渠道',
                                             'persistent-hint': True
                                         }
                                     }
@@ -508,24 +551,16 @@ class TransferSync(_PluginBase):
                     }
                 ]
             }
-        ]
-
-        try:
-            default_values = {
-                "enabled": False,
-                "copy_paths": "",
-                "trigger_events": [TriggerEvent.TRANSFER_COMPLETE.value],
-                "sync_strategy": SyncStrategy.COPY.value
-            }
-        except Exception:
-            default_values = {
-                "enabled": False,
-                "copy_paths": "",
-                "trigger_events": ["transfer.complete"],
-                "sync_strategy": "copy"
-            }
-        
-        return elements, default_values
+        ], {
+            "enabled": False,
+            "copy_paths": "",
+            "enable_incremental": False,
+            "incremental_cron": "0 */6 * * *",
+            "enable_full_sync": False,
+            "full_sync_cron": "0 2 * * 0",
+            "enable_notifications": False,
+            "notification_channels": ""
+        }
 
     def get_page(self) -> List[dict]:
         """获取插件状态页面"""
