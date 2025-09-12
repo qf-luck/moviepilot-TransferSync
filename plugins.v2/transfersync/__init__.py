@@ -64,6 +64,10 @@ class TriggerEvent(Enum):
     WEBHOOK_MESSAGE = "webhook.message"          # Webhook消息
     USER_MESSAGE = "user.message"                # 用户消息
     PLUGIN_TRIGGERED = "plugin.triggered"        # 插件触发事件
+    MEDIA_ADDED = "media.added"                  # 媒体已添加
+    FILE_MOVED = "file.moved"                    # 文件已移动
+    DIRECTORY_SCAN_COMPLETE = "directory.scan.complete"  # 目录扫描完成
+    SCRAPE_COMPLETE = "scrape.complete"          # 刮削完成
     
     @classmethod
     def get_display_names(cls) -> Dict[str, str]:
@@ -75,7 +79,11 @@ class TriggerEvent(Enum):
             cls.METADATA_SCRAPE.value: "元数据刮削",
             cls.WEBHOOK_MESSAGE.value: "Webhook消息",
             cls.USER_MESSAGE.value: "用户消息",
-            cls.PLUGIN_TRIGGERED.value: "插件触发"
+            cls.PLUGIN_TRIGGERED.value: "插件触发",
+            cls.MEDIA_ADDED.value: "媒体添加",
+            cls.FILE_MOVED.value: "文件移动",
+            cls.DIRECTORY_SCAN_COMPLETE.value: "目录扫描完成",
+            cls.SCRAPE_COMPLETE.value: "刮削完成"
         }
 
 
