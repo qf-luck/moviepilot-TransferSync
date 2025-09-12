@@ -81,15 +81,34 @@ class TransferSync(_PluginBase):
         """初始化插件"""
         if config:
             self._enabled = config.get("enabled", False)
-            self._copy_paths = config.get("copy_paths", [])
+            
+            # 处理copy_paths：支持字符串（多行）或列表格式
+            copy_paths_config = config.get("copy_paths", "")
+            if isinstance(copy_paths_config, str):
+                self._copy_paths = [path.strip() for path in copy_paths_config.split('\n') if path.strip()]
+            elif isinstance(copy_paths_config, list):
+                self._copy_paths = copy_paths_config
+            else:
+                self._copy_paths = []
+            
             self._enable_incremental = config.get("enable_incremental", False)
             self._incremental_cron = config.get("incremental_cron", "0 */6 * * *")
             self._enable_full_sync = config.get("enable_full_sync", False)
             self._full_sync_cron = config.get("full_sync_cron", "0 2 * * 0")
             self._enable_notifications = config.get("enable_notifications", False)
             self._notification_channels = config.get("notification_channels", [])
-            self._sync_strategy = SyncStrategy(config.get("sync_strategy", SyncStrategy.COPY.value))
-            self._sync_mode = SyncMode(config.get("sync_mode", SyncMode.IMMEDIATE.value))
+            
+            # 安全地处理枚举值
+            try:
+                self._sync_strategy = SyncStrategy(config.get("sync_strategy", SyncStrategy.COPY.value))
+            except ValueError:
+                self._sync_strategy = SyncStrategy.COPY
+                
+            try:
+                self._sync_mode = SyncMode(config.get("sync_mode", SyncMode.IMMEDIATE.value))
+            except ValueError:
+                self._sync_mode = SyncMode.IMMEDIATE
+            
             self._max_depth = config.get("max_depth", -1)
             self._file_filters = config.get("file_filters", [])
             self._exclude_patterns = config.get("exclude_patterns", [])
@@ -103,20 +122,32 @@ class TransferSync(_PluginBase):
             trigger_events_config = config.get("trigger_events", [])
             if trigger_events_config:
                 event_values = trigger_events_config if isinstance(trigger_events_config, list) else [trigger_events_config]
-                self._trigger_events = [TriggerEvent(val) for val in event_values if self._is_valid_event(val)]
+                try:
+                    self._trigger_events = [TriggerEvent(val) for val in event_values if self._is_valid_event(val)]
+                except Exception:
+                    self._trigger_events = [TriggerEvent.TRANSFER_COMPLETE]
             else:
                 self._trigger_events = [TriggerEvent.TRANSFER_COMPLETE]
             
             self._event_conditions = config.get("event_conditions", {})
 
         # 初始化验证器和同步操作器
-        self._validator = ConfigValidator()
-        self._sync_ops = SyncOperations(self._get_config_dict())
+        try:
+            self._validator = ConfigValidator()
+            self._sync_ops = SyncOperations(self._get_config_dict())
+        except Exception as e:
+            logger.error(f"初始化插件组件失败: {str(e)}")
+            self._validator = None
+            self._sync_ops = None
         
         # 启用插件时注册事件监听
         if self._enabled:
-            self._register_event_listeners()
-            self._setup_scheduler()
+            try:
+                self._register_event_listeners()
+                self._setup_scheduler()
+            except Exception as e:
+                logger.error(f"启用插件失败: {str(e)}")
+                self._enabled = False
 
     def get_state(self) -> bool:
         """获取插件状态"""
@@ -364,24 +395,31 @@ class TransferSync(_PluginBase):
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         """获取插件配置表单"""
-        # 获取事件选项
-        event_options = [{"title": name, "value": event.value} 
-                        for event, name in TriggerEvent.get_display_names().items()]
-        
-        # 获取同步策略选项
-        strategy_options = [
-            {"title": "复制", "value": SyncStrategy.COPY.value},
-            {"title": "移动", "value": SyncStrategy.MOVE.value},
-            {"title": "硬链接", "value": SyncStrategy.HARDLINK.value},
-            {"title": "软链接", "value": SyncStrategy.SOFTLINK.value}
-        ]
-        
-        # 获取同步模式选项
-        mode_options = [
-            {"title": "立即同步", "value": SyncMode.IMMEDIATE.value},
-            {"title": "批量同步", "value": SyncMode.BATCH.value},
-            {"title": "队列同步", "value": SyncMode.QUEUE.value}
-        ]
+        try:
+            # 获取事件选项
+            event_options = [{"title": name, "value": value} 
+                            for value, name in TriggerEvent.get_display_names().items()]
+            
+            # 获取同步策略选项
+            strategy_options = [
+                {"title": "复制", "value": SyncStrategy.COPY.value},
+                {"title": "移动", "value": SyncStrategy.MOVE.value},
+                {"title": "硬链接", "value": SyncStrategy.HARDLINK.value},
+                {"title": "软链接", "value": SyncStrategy.SOFTLINK.value}
+            ]
+            
+            # 获取同步模式选项
+            mode_options = [
+                {"title": "立即同步", "value": SyncMode.IMMEDIATE.value},
+                {"title": "批量同步", "value": SyncMode.BATCH.value},
+                {"title": "队列同步", "value": SyncMode.QUEUE.value}
+            ]
+        except Exception as e:
+            logger.error(f"获取表单选项失败: {str(e)}")
+            # 提供默认选项
+            event_options = [{"title": "整理完成", "value": "transfer.complete"}]
+            strategy_options = [{"title": "复制", "value": "copy"}]
+            mode_options = [{"title": "立即同步", "value": "immediate"}]
 
         elements = [
             {
@@ -472,40 +510,78 @@ class TransferSync(_PluginBase):
             }
         ]
 
-        return elements, {
-            "enabled": False,
-            "copy_paths": "",
-            "trigger_events": [TriggerEvent.TRANSFER_COMPLETE.value],
-            "sync_strategy": SyncStrategy.COPY.value
-        }
+        try:
+            default_values = {
+                "enabled": False,
+                "copy_paths": "",
+                "trigger_events": [TriggerEvent.TRANSFER_COMPLETE.value],
+                "sync_strategy": SyncStrategy.COPY.value
+            }
+        except Exception:
+            default_values = {
+                "enabled": False,
+                "copy_paths": "",
+                "trigger_events": ["transfer.complete"],
+                "sync_strategy": "copy"
+            }
+        
+        return elements, default_values
 
     def get_page(self) -> List[dict]:
         """获取插件状态页面"""
-        # 获取同步统计信息
-        stats = self._sync_ops.sync_records if self._sync_ops else {}
-        
-        return [
-            {
-                'component': 'div',
-                'content': [
-                    {
-                        'component': 'VCard',
-                        'props': {'class': 'mb-3'},
-                        'content': [
-                            {
-                                'component': 'VCardTitle',
-                                'props': {'class': 'text-h6'},
-                                'content': '同步状态'
-                            },
-                            {
-                                'component': 'VCardText',
-                                'content': f'当前状态: {self._sync_ops.current_status.value if self._sync_ops else "未初始化"}'
-                            }
-                        ]
-                    }
-                ]
-            }
-        ]
+        try:
+            # 获取同步统计信息
+            if self._sync_ops:
+                current_status = getattr(self._sync_ops, 'current_status', None)
+                status_text = current_status.value if current_status else "未知"
+                stats_count = len(getattr(self._sync_ops, 'sync_records', {}))
+            else:
+                status_text = "未初始化"
+                stats_count = 0
+                
+            return [
+                {
+                    'component': 'div',
+                    'content': [
+                        {
+                            'component': 'VCard',
+                            'props': {'class': 'mb-3'},
+                            'content': [
+                                {
+                                    'component': 'VCardTitle',
+                                    'props': {'class': 'text-h6'},
+                                    'content': '同步状态'
+                                },
+                                {
+                                    'component': 'VCardText',
+                                    'content': f'当前状态: {status_text}'
+                                },
+                                {
+                                    'component': 'VCardText',
+                                    'content': f'同步记录数: {stats_count}'
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        except Exception as e:
+            logger.error(f"获取状态页面失败: {str(e)}")
+            return [
+                {
+                    'component': 'VCard',
+                    'content': [
+                        {
+                            'component': 'VCardTitle',
+                            'content': '插件状态'
+                        },
+                        {
+                            'component': 'VCardText',
+                            'content': '插件正在加载中...'
+                        }
+                    ]
+                }
+            ]
 
     def sync_single_action(self, action_content) -> Tuple[bool, Any]:
         """手动同步单个项目"""
