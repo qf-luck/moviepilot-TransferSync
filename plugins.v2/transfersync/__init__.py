@@ -15,7 +15,7 @@ from app.core.event import Event, EventType, eventmanager
 from app.core.cache import cached, TTLCache
 from app.plugins import _PluginBase
 from app.log import logger
-from app.schemas.types import EventType, NotificationType
+from app.schemas.types import NotificationType
 from app.schemas import NotificationConf
 from app.helper.notification import NotificationHelper
 from app.helper.mediaserver import MediaServerHelper
