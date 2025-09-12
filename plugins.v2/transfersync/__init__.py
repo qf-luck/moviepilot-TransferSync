@@ -451,7 +451,9 @@ class TransferSync(_PluginBase):
                 logger.warning("远程同步缺少参数")
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """拼装插件配置页面，需要返回两块数据：1、页面配置；2、数据结构"""
+        """
+        拼装插件配置页面，需要返回两块数据：1、页面配置；2、数据结构
+        """
         return [
             {
                 'component': 'VForm',
@@ -461,7 +463,10 @@ class TransferSync(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -481,7 +486,9 @@ class TransferSync(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12},
+                                'props': {
+                                    'cols': 12
+                                },
                                 'content': [
                                     {
                                         'component': 'VTextarea',
@@ -503,7 +510,10 @@ class TransferSync(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -518,7 +528,10 @@ class TransferSync(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
                                 'content': [
                                     {
                                         'component': 'VTextField',
@@ -539,7 +552,10 @@ class TransferSync(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -554,7 +570,10 @@ class TransferSync(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
                                 'content': [
                                     {
                                         'component': 'VTextField',
@@ -575,7 +594,10 @@ class TransferSync(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -590,7 +612,10 @@ class TransferSync(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
                                 'content': [
                                     {
                                         'component': 'VTextField',
@@ -599,6 +624,266 @@ class TransferSync(_PluginBase):
                                             'label': '通知渠道',
                                             'placeholder': '渠道1,渠道2',
                                             'hint': '指定发送通知的渠道，多个用逗号分隔，留空则发送到所有渠道',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VDivider',
+                        'props': {
+                            'class': 'my-4'
+                        }
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSubheader',
+                                        'props': {
+                                            'text': '高级配置'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'sync_strategy',
+                                            'label': '同步策略',
+                                            'items': [
+                                                {'title': '复制', 'value': 'copy'},
+                                                {'title': '移动', 'value': 'move'},
+                                                {'title': '硬链接', 'value': 'hardlink'},
+                                                {'title': '软链接', 'value': 'softlink'}
+                                            ],
+                                            'hint': '选择文件同步方式',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'sync_mode',
+                                            'label': '同步模式',
+                                            'items': [
+                                                {'title': '立即同步', 'value': 'immediate'},
+                                                {'title': '批量同步', 'value': 'batch'},
+                                                {'title': '队列同步', 'value': 'queue'}
+                                            ],
+                                            'hint': '选择同步执行方式',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'max_depth',
+                                            'label': '最大目录深度',
+                                            'type': 'number',
+                                            'placeholder': '-1',
+                                            'hint': '-1表示无限制深度',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'max_workers',
+                                            'label': '最大工作线程',
+                                            'type': 'number',
+                                            'placeholder': '4',
+                                            'hint': '同时处理的文件数量',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'batch_size',
+                                            'label': '批处理大小',
+                                            'type': 'number',
+                                            'placeholder': '100',
+                                            'hint': '每批次处理的文件数量',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'min_file_size',
+                                            'label': '最小文件大小(MB)',
+                                            'type': 'number',
+                                            'placeholder': '0',
+                                            'hint': '小于此大小的文件将被忽略',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'max_file_size',
+                                            'label': '最大文件大小(MB)',
+                                            'type': 'number',
+                                            'placeholder': '0',
+                                            'hint': '0表示无限制，大于此大小的文件将被忽略',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextarea',
+                                        'props': {
+                                            'model': 'exclude_patterns',
+                                            'label': '排除模式',
+                                            'placeholder': '每行一个模式，支持通配符和正则表达式\n例如：\n*.tmp\n*.log\n.DS_Store',
+                                            'hint': '匹配这些模式的文件将被跳过',
+                                            'persistent-hint': True,
+                                            'rows': 3
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'trigger_events',
+                                            'label': '监听事件类型',
+                                            'items': [
+                                                {'title': '整理完成', 'value': 'transfer.complete'},
+                                                {'title': '下载添加', 'value': 'download.added'},
+                                                {'title': '订阅完成', 'value': 'subscribe.complete'},
+                                                {'title': '媒体添加', 'value': 'media.added'}
+                                            ],
+                                            'multiple': True,
+                                            'chips': True,
+                                            'hint': '选择触发同步的事件类型',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enable_progress',
+                                            'label': '显示进度',
+                                            'hint': '在处理过程中显示进度信息',
                                             'persistent-hint': True
                                         }
                                     }
@@ -616,7 +901,19 @@ class TransferSync(_PluginBase):
             "enable_full_sync": False,
             "full_sync_cron": "0 2 * * 0",
             "enable_notifications": False,
-            "notification_channels": ""
+            "notification_channels": "",
+            "sync_strategy": "copy",
+            "sync_mode": "immediate",
+            "max_depth": -1,
+            "file_filters": "",
+            "exclude_patterns": "",
+            "min_file_size": 0,
+            "max_file_size": 0,
+            "enable_progress": True,
+            "max_workers": 4,
+            "batch_size": 100,
+            "trigger_events": ["transfer.complete"],
+            "event_conditions": ""
         }
 
     def get_page(self) -> List[dict]:
