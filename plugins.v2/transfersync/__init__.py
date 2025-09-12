@@ -13,7 +13,6 @@ from apscheduler.triggers.cron import CronTrigger
 from app.core.config import settings
 from app.core.event import Event, EventType, eventmanager
 from app.core.cache import cached, TTLCache
-from app.core.context import CacheManager
 from app.plugins import _PluginBase
 from app.log import logger
 from app.schemas.types import NotificationType
@@ -144,8 +143,8 @@ class TransferSync(_PluginBase):
         self._mediaserver_helper = MediaServerHelper()
         self._storage_helper = StorageHelper()
         
-        # 初始化缓存管理器
-        self._cache_manager = CacheManager()
+        # 初始化缓存管理器为None (系统级缓存暂不可用)
+        self._cache_manager = None
         
         # 清理旧的缓存数据
         self._cleanup_cache()
