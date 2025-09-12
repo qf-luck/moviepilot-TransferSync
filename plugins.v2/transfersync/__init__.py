@@ -1,6 +1,7 @@
 """
 整理后同步插件 - 重构版本
 """
+import re
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -179,31 +180,87 @@ class TransferSync(_PluginBase):
         }
 
     def _register_event_listeners(self):
-        """为指定事件类型注册监听器"""
-        handler_map = {
-            TriggerEvent.TRANSFER_COMPLETE: self._on_transfer_complete,
-            TriggerEvent.DOWNLOAD_ADDED: self._on_download_added,
-            TriggerEvent.SUBSCRIBE_COMPLETE: self._on_subscribe_complete,
-            TriggerEvent.MEDIA_ADDED: self._on_media_added,
-            TriggerEvent.FILE_MOVED: self._on_file_moved,
-            TriggerEvent.DIRECTORY_SCAN_COMPLETE: self._on_directory_scan_complete,
-            TriggerEvent.SCRAPE_COMPLETE: self._on_scrape_complete,
-            TriggerEvent.PLUGIN_TRIGGERED: self._on_plugin_triggered
-        }
-        
+        """注册事件监听器"""
+        # 清除之前注册的监听器
+        self._unregister_event_listeners()
+
+        # 注册新的事件监听器
         for trigger_event in self._trigger_events:
-            handler = handler_map.get(trigger_event)
-            if handler:
-                # 使用装饰器注册事件处理器
-                decorated_handler = event_handler(trigger_event)(handler)
-                setattr(self, f'_decorated_{trigger_event.value}', decorated_handler)
-                
-                # 注册到事件管理器
+            try:
+                if trigger_event == TriggerEvent.TRANSFER_COMPLETE:
+                    eventmanager.register(EventType.TransferComplete)(self._on_transfer_complete)
+                elif trigger_event == TriggerEvent.DOWNLOAD_ADDED:
+                    eventmanager.register(EventType.DownloadAdded)(self._on_download_added)
+                elif trigger_event == TriggerEvent.SUBSCRIBE_COMPLETE:
+                    eventmanager.register(EventType.SubscribeComplete)(self._on_subscribe_complete)
+                elif trigger_event == TriggerEvent.METADATA_SCRAPE:
+                    eventmanager.register(EventType.MetadataScrape)(self._on_metadata_scrape)
+                elif trigger_event == TriggerEvent.WEBHOOK_MESSAGE:
+                    eventmanager.register(EventType.WebhookMessage)(self._on_webhook_message)
+                elif trigger_event == TriggerEvent.USER_MESSAGE:
+                    eventmanager.register(EventType.UserMessage)(self._on_user_message)
+                elif trigger_event == TriggerEvent.PLUGIN_TRIGGERED:
+                    eventmanager.register(EventType.PluginTriggered)(self._on_plugin_triggered)
+                elif trigger_event == TriggerEvent.MEDIA_ADDED:
+                    eventmanager.register(EventType.MediaAdded)(self._on_media_added)
+                elif trigger_event == TriggerEvent.FILE_MOVED:
+                    eventmanager.register(EventType.FileMoved)(self._on_file_moved)
+                elif trigger_event == TriggerEvent.DIRECTORY_SCAN_COMPLETE:
+                    eventmanager.register(EventType.DirectoryScanComplete)(self._on_directory_scan_complete)
+                elif trigger_event == TriggerEvent.SCRAPE_COMPLETE:
+                    eventmanager.register(EventType.ScrapeComplete)(self._on_scrape_complete)
+
+                logger.debug(f"已注册事件监听器: {trigger_event.value}")
+            except Exception as e:
+                logger.error(f"注册事件监听器失败 {trigger_event.value}: {str(e)}")
+
+    def _unregister_event_listeners(self):
+        """注销事件监听器"""
+        try:
+            # 注销所有可能的事件监听器
+            event_handlers = [
+                (EventType.TransferComplete, self._on_transfer_complete),
+                (EventType.DownloadAdded, self._on_download_added),
+                (EventType.SubscribeComplete, self._on_subscribe_complete),
+                (EventType.MetadataScrape, self._on_metadata_scrape),
+                (EventType.WebhookMessage, self._on_webhook_message),
+                (EventType.UserMessage, self._on_user_message),
+                (EventType.PluginTriggered, self._on_plugin_triggered),
+                (EventType.MediaAdded, self._on_media_added),
+                (EventType.FileMoved, self._on_file_moved),
+                (EventType.DirectoryScanComplete, self._on_directory_scan_complete),
+                (EventType.ScrapeComplete, self._on_scrape_complete)
+            ]
+
+            for event_type, handler in event_handlers:
                 try:
-                    eventmanager.register_event(EventType.to_event_type(trigger_event.value), decorated_handler)
-                    logger.info(f"已注册{self._get_event_display_name(trigger_event.value)}事件监听器")
-                except Exception as e:
-                    logger.warning(f"注册{trigger_event.value}事件监听器失败: {str(e)}")
+                    eventmanager.unregister(event_type, handler)
+                except:
+                    pass  # 忽略注销失败的错误
+
+        except Exception as e:
+            logger.error(f"注销事件监听器失败: {str(e)}")
+            
+    def _on_metadata_scrape(self, event: Event):
+        """处理元数据刮削事件"""
+        source_path = self._extract_sync_path(event.event_data, TriggerEvent.METADATA_SCRAPE)
+        if source_path:
+            self._sync_ops.sync_single_item(source_path)
+        return True
+
+    def _on_webhook_message(self, event: Event):
+        """处理Webhook消息事件"""
+        source_path = self._extract_sync_path(event.event_data, TriggerEvent.WEBHOOK_MESSAGE)
+        if source_path:
+            self._sync_ops.sync_single_item(source_path)
+        return True
+
+    def _on_user_message(self, event: Event):
+        """处理用户消息事件"""
+        source_path = self._extract_sync_path(event.event_data, TriggerEvent.USER_MESSAGE)
+        if source_path:
+            self._sync_ops.sync_single_item(source_path)
+        return True
 
     def _setup_scheduler(self):
         """设置定时任务调度器"""
@@ -629,3 +686,416 @@ class TransferSync(_PluginBase):
         except Exception as e:
             logger.error(f"手动同步失败: {str(e)}")
             return False, str(e)
+
+    @staticmethod
+    def get_command() -> List[Dict[str, Any]]:
+        """定义远程控制命令"""
+        return [
+            {
+                "cmd": "/transfersync",
+                "event": EventType.PluginAction,
+                "desc": "整理后同步",
+                "category": "文件管理",
+                "data": {
+                    "action": "transfersync"
+                }
+            }
+        ]
+
+    def get_api(self) -> List[Dict[str, Any]]:
+        """获取插件API"""
+        return [
+            {
+                "path": "/sync_now",
+                "endpoint": self.sync_now,
+                "methods": ["GET"],
+                "summary": "立即同步",
+                "description": "立即执行全量同步"
+            },
+            {
+                "path": "/reset_event_stats", 
+                "endpoint": self.reset_event_statistics,
+                "methods": ["POST"],
+                "summary": "重置事件统计",
+                "description": "重置所有事件统计数据"
+            }
+        ]
+
+    def sync_now(self) -> dict:
+        """API接口：立即同步"""
+        try:
+            # 执行全量同步
+            self._full_sync_job()
+            return {
+                "code": 0,
+                "message": "同步任务已启动"
+            }
+        except Exception as e:
+            logger.error(f"立即同步失败: {str(e)}")
+            return {
+                "code": 1,
+                "message": f"同步失败: {str(e)}"
+            }
+
+    def reset_event_statistics(self) -> dict:
+        """API接口：重置事件统计"""
+        try:
+            with self._lock:
+                self._event_statistics.clear()
+            return {
+                "code": 0,
+                "message": "事件统计已重置"
+            }
+        except Exception as e:
+            logger.error(f"重置统计失败: {str(e)}")
+            return {
+                "code": 1,
+                "message": f"重置失败: {str(e)}"
+            }
+
+    def get_service(self) -> List[Dict[str, Any]]:
+        """注册公共定时服务"""
+        services = []
+
+        if self._enable_incremental:
+            services.append({
+                "id": "transfersync_incremental", 
+                "name": "整理后同步-增量同步",
+                "trigger": CronTrigger.from_crontab(self._incremental_cron),
+                "func": self._incremental_sync_job,
+                "kwargs": {}
+            })
+
+        if self._enable_full_sync:
+            services.append({
+                "id": "transfersync_full",
+                "name": "整理后同步-全量同步", 
+                "trigger": CronTrigger.from_crontab(self._full_sync_cron),
+                "func": self._full_sync_job,
+                "kwargs": {}
+            })
+
+        return services
+
+    def get_actions(self) -> List[Dict[str, Any]]:
+        """获取插件工作流动作"""
+        return [
+            {
+                "id": "sync_single",
+                "name": "同步单个文件/目录",
+                "func": self.sync_single_action,
+                "kwargs": {}
+            },
+            {
+                "id": "sync_incremental", 
+                "name": "执行增量同步",
+                "func": self.sync_incremental_action,
+                "kwargs": {}
+            },
+            {
+                "id": "sync_full",
+                "name": "执行全量同步", 
+                "func": self.sync_full_action,
+                "kwargs": {}
+            }
+        ]
+
+    def sync_incremental_action(self, action_content) -> Tuple[bool, Any]:
+        """工作流动作：增量同步"""
+        try:
+            self._incremental_sync_job()
+            return True, "增量同步任务已启动"
+        except Exception as e:
+            logger.error(f"增量同步失败: {str(e)}")
+            return False, str(e)
+
+    def sync_full_action(self, action_content) -> Tuple[bool, Any]:
+        """工作流动作：全量同步"""
+        try:
+            self._full_sync_job()
+            return True, "全量同步任务已启动"
+        except Exception as e:
+            logger.error(f"全量同步失败: {str(e)}")
+            return False, str(e)
+
+    def get_event_statistics(self) -> Dict[str, Any]:
+        """获取事件统计信息"""
+        if not hasattr(self, '_event_statistics'):
+            self._event_statistics = {}
+
+        # 添加成功率计算
+        for event_key, stats in self._event_statistics.items():
+            if stats['total_count'] > 0:
+                stats['success_rate'] = round((stats['success_count'] / stats['total_count']) * 100, 2)
+            else:
+                stats['success_rate'] = 0
+            
+            # 添加最后触发时间
+            stats['last_triggered'] = stats.get('last_triggered', '从未触发')
+
+        return self._event_statistics
+
+    def _send_notification(self, title: str, text: str, image: str = None):
+        """发送通知"""
+        if not self._enable_notifications:
+            return
+
+        try:
+            notification_helper = NotificationHelper()
+            if self._notification_channels:
+                # 指定渠道发送
+                channels = self._notification_channels if isinstance(self._notification_channels, list) else [self._notification_channels]
+                for channel in channels:
+                    notification_helper.send_notification(
+                        title=title,
+                        text=text,
+                        image=image,
+                        channel=channel
+                    )
+            else:
+                # 发送到所有渠道
+                notification_helper.send_notification(
+                    title=title,
+                    text=text,
+                    image=image
+                )
+        except Exception as e:
+            logger.error(f"发送通知失败: {str(e)}")
+
+    def _check_event_conditions(self, event_data: Dict, event_type: TriggerEvent) -> bool:
+        """检查事件是否满足过滤条件"""
+        if not self._event_conditions:
+            return True
+
+        try:
+            conditions = self._event_conditions.get(event_type.value, {})
+            if not conditions:
+                return True
+
+            # 媒体类型过滤
+            if 'media_type' in conditions:
+                expected_type = conditions['media_type'].lower()
+                actual_type = str(event_data.get('type', '')).lower()
+                if expected_type != actual_type and expected_type != 'all':
+                    return False
+
+            # 源路径过滤
+            if 'source_path' in conditions:
+                pattern = conditions['source_path']
+                source_path = str(event_data.get('src', event_data.get('source_path', '')))
+                if not re.search(pattern, source_path, re.IGNORECASE):
+                    return False
+
+            # 目标路径过滤
+            if 'target_path' in conditions:
+                pattern = conditions['target_path']
+                target_path = str(event_data.get('dest', event_data.get('target_path', '')))
+                if not re.search(pattern, target_path, re.IGNORECASE):
+                    return False
+
+            # 文件大小过滤
+            if 'file_size' in conditions:
+                condition_size = conditions['file_size']
+                file_size = event_data.get('file_size', 0)
+                if not self._match_condition(file_size, condition_size):
+                    return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"检查事件条件失败: {str(e)}")
+            return True  # 条件检查失败时允许通过
+
+    def _match_condition(self, value, condition_str: str) -> bool:
+        """匹配条件值"""
+        try:
+            if isinstance(value, (int, float)):
+                # 数值比较
+                if condition_str.startswith('>='):
+                    return value >= float(condition_str[2:])
+                elif condition_str.startswith('<='):
+                    return value <= float(condition_str[2:])
+                elif condition_str.startswith('>'):
+                    return value > float(condition_str[1:])
+                elif condition_str.startswith('<'):
+                    return value < float(condition_str[1:])
+                elif condition_str.startswith('!='):
+                    return value != float(condition_str[2:])
+                else:
+                    return value == float(condition_str)
+            else:
+                # 字符串比较
+                return str(value).lower() == str(condition_str).lower()
+        except:
+            return True
+
+    def _format_size(self, size_bytes: int) -> str:
+        """格式化文件大小显示"""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+    def _get_sync_status(self) -> Dict[str, Any]:
+        """获取同步状态信息"""
+        try:
+            if not self._sync_ops:
+                return {
+                    'status': SyncStatus.IDLE.value,
+                    'message': '同步操作器未初始化',
+                    'total_synced': 0,
+                    'last_sync_time': None
+                }
+
+            current_status = getattr(self._sync_ops, 'current_status', SyncStatus.IDLE)
+            sync_records = getattr(self._sync_ops, 'sync_records', {})
+            
+            return {
+                'status': current_status.value if hasattr(current_status, 'value') else str(current_status),
+                'message': f'已同步 {len(sync_records)} 个项目',
+                'total_synced': len(sync_records),
+                'last_sync_time': self._last_sync_time.isoformat() if self._last_sync_time else None,
+                'enabled_paths': len(self._copy_paths),
+                'trigger_events': [event.value for event in self._trigger_events]
+            }
+        except Exception as e:
+            logger.error(f"获取同步状态失败: {str(e)}")
+            return {
+                'status': SyncStatus.ERROR.value,
+                'message': f'获取状态失败: {str(e)}',
+                'total_synced': 0,
+                'last_sync_time': None
+            }
+
+    def clear_cache(self):
+        """清理插件缓存"""
+        try:
+            # 清理事件统计缓存
+            with self._lock:
+                self._event_statistics.clear()
+            
+            # 清理同步操作器缓存
+            if self._sync_ops and hasattr(self._sync_ops, 'clear_cache'):
+                self._sync_ops.clear_cache()
+            
+            logger.info("插件缓存已清理")
+            return True
+        except Exception as e:
+            logger.error(f"清理缓存失败: {str(e)}")
+            return False
+
+    def pause_sync(self):
+        """暂停同步"""
+        try:
+            if self._sync_ops and hasattr(self._sync_ops, 'pause'):
+                self._sync_ops.pause()
+            logger.info("同步已暂停")
+            return True
+        except Exception as e:
+            logger.error(f"暂停同步失败: {str(e)}")
+            return False
+
+    def resume_sync(self):
+        """恢复同步"""
+        try:
+            if self._sync_ops and hasattr(self._sync_ops, 'resume'):
+                self._sync_ops.resume()
+            logger.info("同步已恢复")
+            return True
+        except Exception as e:
+            logger.error(f"恢复同步失败: {str(e)}")
+            return False
+
+    def get_sync_status(self) -> Dict[str, Any]:
+        """获取当前同步状态（公开方法）"""
+        return self._get_sync_status()
+
+    def _get_media_library_paths(self) -> List[Path]:
+        """获取媒体库路径"""
+        try:
+            # 从配置或系统获取媒体库路径
+            media_paths = []
+            
+            # 尝试从MoviePilot设置获取路径
+            if hasattr(settings, 'LIBRARY_PATH') and settings.LIBRARY_PATH:
+                media_paths.append(Path(settings.LIBRARY_PATH))
+            
+            # 添加用户配置的同步路径作为候选媒体库路径
+            for path_str in self._copy_paths:
+                path = Path(path_str)
+                if path.exists() and path.is_dir():
+                    media_paths.append(path)
+            
+            return media_paths
+        except Exception as e:
+            logger.error(f"获取媒体库路径失败: {str(e)}")
+            return []
+
+    def _get_filtered_files(self, path: Path, max_depth: int = -1, current_depth: int = 0) -> List[Path]:
+        """获取过滤后的文件列表"""
+        filtered_files = []
+        
+        try:
+            if not path.exists() or not path.is_dir():
+                return filtered_files
+            
+            # 检查深度限制
+            if max_depth >= 0 and current_depth > max_depth:
+                return filtered_files
+            
+            for item in path.iterdir():
+                try:
+                    if item.is_file():
+                        # 应用文件过滤器
+                        if self._should_sync_file(item):
+                            filtered_files.append(item)
+                    elif item.is_dir() and (max_depth < 0 or current_depth < max_depth):
+                        # 递归处理子目录
+                        sub_files = self._get_filtered_files(item, max_depth, current_depth + 1)
+                        filtered_files.extend(sub_files)
+                except PermissionError:
+                    logger.warning(f"无权限访问: {item}")
+                    continue
+                except Exception as e:
+                    logger.error(f"处理文件 {item} 时出错: {str(e)}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"获取过滤文件列表失败: {str(e)}")
+            
+        return filtered_files
+
+    def _should_sync_file(self, file_path: Path) -> bool:
+        """检查文件是否应该同步"""
+        try:
+            # 检查文件大小限制
+            if file_path.exists():
+                file_size_mb = file_path.stat().st_size / (1024 * 1024)
+                
+                if self._max_file_size > 0 and file_size_mb > self._max_file_size:
+                    return False
+                    
+                if self._min_file_size > 0 and file_size_mb < self._min_file_size:
+                    return False
+            
+            # 检查排除模式
+            file_name = file_path.name.lower()
+            for pattern in self._exclude_patterns:
+                try:
+                    if re.match(pattern.lower(), file_name):
+                        return False
+                except re.error:
+                    # 如果正则表达式无效，尝试简单的通配符匹配
+                    import fnmatch
+                    if fnmatch.fnmatch(file_name, pattern.lower()):
+                        return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"检查文件同步条件失败 {file_path}: {str(e)}")
+            return True  # 出错时默认允许同步
