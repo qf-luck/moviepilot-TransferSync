@@ -703,8 +703,8 @@ class TransferSync(_PluginBase):
         ]
 
     def get_api(self) -> List[Dict[str, Any]]:
-        """获取插件API"""
-        return [
+        """获取插件API接口"""
+        api_list = [
             {
                 "path": "/sync_now",
                 "endpoint": self.sync_now,
@@ -720,6 +720,7 @@ class TransferSync(_PluginBase):
                 "description": "重置所有事件统计数据"
             }
         ]
+        return api_list
 
     def sync_now(self) -> dict:
         """API接口：立即同步"""
