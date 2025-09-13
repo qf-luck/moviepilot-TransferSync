@@ -255,9 +255,9 @@ class TransferSync(_PluginBase):
         返回插件使用的前端渲染模式
         :return: 前端渲染模式，前端文件目录
         """
-        # 可以选择使用Vue模式或传统Vuetify模式
-        # return "vue", "dist/assets"  # Vue模块联邦模式
-        return "vuetify", None  # 传统Vuetify JSON配置模式
+        # 使用Vue模式以获得更好的用户体验
+        return "vue", "dist/assets"  # Vue模块联邦模式
+        # return "vuetify", None  # 传统Vuetify JSON配置模式
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         """获取配置表单 - 支持Vuetify和Vue模式"""
@@ -920,9 +920,28 @@ class TransferSync(_PluginBase):
     def get_config_api(self) -> Dict[str, Any]:
         """获取配置API - 为Vue前端提供配置数据"""
         try:
+            config_data = self._get_vue_config()
+            # 确保所有字段都有默认值
+            default_config = {
+                "enabled": False,
+                "source_path": "",
+                "target_path": "",
+                "sync_paths": "",
+                "sync_type": "incremental",
+                "execution_mode": "immediate",
+                "delay_minutes": 5,
+                "enable_notifications": False,
+                "sync_strategy": "copy",
+                "max_depth": -1,
+                "file_filters": "",
+                "exclude_patterns": "",
+                "max_workers": 4,
+                "trigger_events": ["transfer.complete"]
+            }
+            default_config.update(config_data)
             return {
                 "success": True,
-                "data": self._get_vue_config()
+                "data": default_config
             }
         except Exception as e:
             logger.error(f"获取配置API失败: {str(e)}")

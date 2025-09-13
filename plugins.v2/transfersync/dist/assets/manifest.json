@@ -1,0 +1,30 @@
+{
+  "name": "TransferSync",
+  "version": "1.5.0",
+  "description": "整理后同步插件 - 现代化Vue界面",
+  "main": "remoteEntry.js",
+  "exports": {
+    "./Config": {
+      "import": "./remoteEntry.js"
+    },
+    "./Dashboard": {
+      "import": "./remoteEntry.js"
+    },
+    "./Page": {
+      "import": "./remoteEntry.js"
+    }
+  },
+  "remotes": {},
+  "shared": {
+    "vue": {
+      "singleton": true,
+      "requiredVersion": "^3.0.0"
+    }
+  },
+  "files": [
+    "index.html",
+    "index.js",
+    "index.css",
+    "remoteEntry.js"
+  ]
+}
