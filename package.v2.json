@@ -5,7 +5,7 @@
     "labels": "CloudDrive2,监控,通知,助手",
     "version": "1.0.0",
     "icon": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png",
-    "author": "thsrite",
+    "author": "redream",
     "level": 2,
     "history": {
       "v1.0.0": "初始版本，支持CloudDrive2上传任务监控、Cookie过期检测、系统信息查看、云下载功能"
