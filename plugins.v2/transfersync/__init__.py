@@ -22,7 +22,7 @@ except ImportError:
     ServiceManager = None
 
 # 导入功能模块
-from .sync_types import SyncStrategy, SyncMode, TriggerEvent
+from .sync_types import SyncStrategy, SyncType, ExecutionMode, TriggerEvent
 from .sync_operations import SyncOperations
 from .command_handler import CommandHandler
 
@@ -67,12 +67,13 @@ class TransferSync(_PluginBase):
         self._enabled = False
         self._lock = threading.Lock()
 
-        # 配置属性 - 优化版本
+        # 配置属性 - 按要求重新设计
         self._sync_paths = []  # 多路径支持
         self._delay_minutes = 5
         self._enable_notifications = False
         self._sync_strategy = SyncStrategy.COPY
-        self._sync_mode = SyncMode.IMMEDIATE  # 立即/延迟执行
+        self._sync_type = SyncType.INCREMENTAL  # 增量同步/全量同步策略
+        self._execution_mode = ExecutionMode.IMMEDIATE  # 立即/延迟执行
         self._max_depth = -1
         self._file_filters = []
         self._exclude_patterns = []
@@ -114,13 +115,14 @@ class TransferSync(_PluginBase):
             logger.error(f"TransferSync插件初始化失败: {str(e)}")
 
     def _apply_config(self, config: Dict[str, Any]):
-        """应用解析后的配置 - 优化版本"""
+        """应用解析后的配置 - 按要求修改"""
         self._enabled = config.get("enabled", False)
         self._sync_paths = config.get("sync_paths", [])
         self._delay_minutes = config.get("delay_minutes", 5)
         self._enable_notifications = config.get("enable_notifications", False)
         self._sync_strategy = config.get("sync_strategy", SyncStrategy.COPY)
-        self._sync_mode = config.get("sync_mode", SyncMode.IMMEDIATE)
+        self._sync_type = config.get("sync_type", SyncType.INCREMENTAL)
+        self._execution_mode = config.get("execution_mode", ExecutionMode.IMMEDIATE)
         self._max_depth = config.get("max_depth", -1)
         self._file_filters = config.get("file_filters", [])
         self._exclude_patterns = config.get("exclude_patterns", [])
@@ -219,11 +221,18 @@ class TransferSync(_PluginBase):
                 "methods": ["GET"],
                 "summary": "浏览文件目录",
                 "description": "用于路径选择的文件管理器接口"
+            },
+            {
+                "path": "/browse_path",
+                "endpoint": self.browse_path,
+                "methods": ["POST"],
+                "summary": "浏览指定路径",
+                "description": "浏览指定路径的文件和目录"
             }
         ]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """获取配置表单 - 使用Vuetify组件，参考p115strmhelper设计"""
+        """获取配置表单 - 按要求重新设计"""
         return [
             {
                 'component': 'VForm',
@@ -240,7 +249,7 @@ class TransferSync(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '整理后同步插件 - 监听事件自动同步文件，支持增量和全量同步模式'
+                                            'text': '整理后同步插件 - 支持增量和全量同步策略，可选延迟执行'
                                         }
                                     }
                                 ]
@@ -259,8 +268,7 @@ class TransferSync(_PluginBase):
                                         'component': 'VSwitch',
                                         'props': {
                                             'model': 'enabled',
-                                            'label': '启用插件',
-                                            'hint': '开启后将监听事件并自动同步'
+                                            'label': '启用插件'
                                         }
                                     }
                                 ]
@@ -273,15 +281,65 @@ class TransferSync(_PluginBase):
                                         'component': 'VSwitch',
                                         'props': {
                                             'model': 'enable_notifications',
-                                            'label': '启用通知',
-                                            'hint': '开启后将发送同步状态通知'
+                                            'label': '启用通知'
                                         }
                                     }
                                 ]
                             }
                         ]
                     },
-                    # 同步路径配置 - 参考p115strmhelper设计
+                    # 同步路径配置 - 真正参考p115strmhelper：两个独立的输入框
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 5},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'source_path',
+                                            'label': '源路径',
+                                            'placeholder': '请输入或选择源路径',
+                                            'appendInnerIcon': 'mdi-folder-search',
+                                            'onclick:appendInner': 'browseSourcePath'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 5},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'target_path',
+                                            'label': '目标路径',
+                                            'placeholder': '请输入或选择目标路径',
+                                            'appendInnerIcon': 'mdi-folder-search',
+                                            'onclick:appendInner': 'browseTargetPath'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 2},
+                                'content': [
+                                    {
+                                        'component': 'VBtn',
+                                        'props': {
+                                            'text': '添加路径',
+                                            'color': 'primary',
+                                            'onclick': 'addSyncPath'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
                     {
                         'component': 'VRow',
                         'content': [
@@ -290,147 +348,62 @@ class TransferSync(_PluginBase):
                                 'props': {'cols': 12},
                                 'content': [
                                     {
-                                        'component': 'VCard',
-                                        'props': {'variant': 'tonal'},
-                                        'content': [
-                                            {
-                                                'component': 'VCardTitle',
-                                                'props': {'class': 'text-subtitle-1'},
-                                                'text': '同步路径配置'
-                                            },
-                                            {
-                                                'component': 'VCardText',
-                                                'content': [
-                                                    {
-                                                        'component': 'VRow',
-                                                        'content': [
-                                                            {
-                                                                'component': 'VCol',
-                                                                'props': {'cols': 12, 'md': 5},
-                                                                'content': [
-                                                                    {
-                                                                        'component': 'VTextField',
-                                                                        'props': {
-                                                                            'model': 'source_path',
-                                                                            'label': '源路径',
-                                                                            'placeholder': '请选择或输入源路径',
-                                                                            'clearable': True
-                                                                        }
-                                                                    }
-                                                                ]
-                                                            },
-                                                            {
-                                                                'component': 'VCol',
-                                                                'props': {'cols': 12, 'md': 1},
-                                                                'content': [
-                                                                    {
-                                                                        'component': 'VBtn',
-                                                                        'props': {
-                                                                            'icon': 'mdi-folder-search',
-                                                                            'variant': 'outlined',
-                                                                            'color': 'primary',
-                                                                            'size': 'small',
-                                                                            'onclick': 'browseSourcePath'
-                                                                        }
-                                                                    }
-                                                                ]
-                                                            },
-                                                            {
-                                                                'component': 'VCol',
-                                                                'props': {'cols': 12, 'md': 5},
-                                                                'content': [
-                                                                    {
-                                                                        'component': 'VTextField',
-                                                                        'props': {
-                                                                            'model': 'target_path',
-                                                                            'label': '目标路径',
-                                                                            'placeholder': '请选择或输入目标路径',
-                                                                            'clearable': True
-                                                                        }
-                                                                    }
-                                                                ]
-                                                            },
-                                                            {
-                                                                'component': 'VCol',
-                                                                'props': {'cols': 12, 'md': 1},
-                                                                'content': [
-                                                                    {
-                                                                        'component': 'VBtn',
-                                                                        'props': {
-                                                                            'icon': 'mdi-folder-search',
-                                                                            'variant': 'outlined',
-                                                                            'color': 'primary',
-                                                                            'size': 'small',
-                                                                            'onclick': 'browseTargetPath'
-                                                                        }
-                                                                    }
-                                                                ]
-                                                            }
-                                                        ]
-                                                    },
-                                                    {
-                                                        'component': 'VTextarea',
-                                                        'props': {
-                                                            'model': 'sync_paths',
-                                                            'label': '同步路径列表',
-                                                            'placeholder': '源路径1->目标路径1\n源路径2->目标路径2',
-                                                            'hint': '每行一组路径配置，格式：源路径->目标路径',
-                                                            'rows': 3
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
+                                        'component': 'VTextarea',
+                                        'props': {
+                                            'model': 'sync_paths',
+                                            'label': '同步路径列表',
+                                            'placeholder': '源路径1->目标路径1\n源路径2->目标路径2',
+                                            'hint': '每行一组路径配置，格式：源路径->目标路径',
+                                            'rows': 3
+                                        }
                                     }
                                 ]
                             }
                         ]
                     },
-                    # 同步配置
+                    # 同步策略配置 - 按要求改为增量/全量同步策略
                     {
                         'component': 'VRow',
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 4},
+                                'props': {'cols': 12, 'md': 3},
                                 'content': [
                                     {
                                         'component': 'VSelect',
                                         'props': {
-                                            'model': 'sync_strategy',
-                                            'label': '同步策略',
+                                            'model': 'sync_type',
+                                            'label': '同步类型',
                                             'items': [
-                                                {'title': '复制文件', 'value': 'copy'},
-                                                {'title': '移动文件', 'value': 'move'},
-                                                {'title': '软链接', 'value': 'softlink'},
-                                                {'title': '硬链接', 'value': 'hardlink'}
+                                                {'title': '增量同步', 'value': 'incremental'},
+                                                {'title': '全量同步', 'value': 'full'}
                                             ],
-                                            'hint': '选择文件同步的方式'
+                                            'hint': '选择增量同步或全量同步策略'
                                         }
                                     }
                                 ]
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 4},
+                                'props': {'cols': 12, 'md': 3},
                                 'content': [
                                     {
                                         'component': 'VSelect',
                                         'props': {
-                                            'model': 'sync_mode',
+                                            'model': 'execution_mode',
                                             'label': '执行模式',
                                             'items': [
                                                 {'title': '立即执行', 'value': 'immediate'},
                                                 {'title': '延迟执行', 'value': 'delayed'}
                                             ],
-                                            'hint': '选择同步执行的时机'
+                                            'hint': '选择立即还是延迟执行'
                                         }
                                     }
                                 ]
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 4},
+                                'props': {'cols': 12, 'md': 3},
                                 'content': [
                                     {
                                         'component': 'VTextField',
@@ -438,8 +411,28 @@ class TransferSync(_PluginBase):
                                             'model': 'delay_minutes',
                                             'label': '延迟时间（分钟）',
                                             'type': 'number',
-                                            'hint': '延迟执行模式下的等待时间',
-                                            'show': '{{ sync_mode === "delayed" }}'
+                                            'hint': '延迟执行的等待时间',
+                                            'show': '{{ execution_mode === "delayed" }}'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'sync_strategy',
+                                            'label': '文件操作',
+                                            'items': [
+                                                {'title': '复制文件', 'value': 'copy'},
+                                                {'title': '移动文件', 'value': 'move'},
+                                                {'title': '软链接', 'value': 'softlink'},
+                                                {'title': '硬链接', 'value': 'hardlink'}
+                                            ],
+                                            'hint': '选择文件操作方式'
                                         }
                                     }
                                 ]
@@ -548,6 +541,85 @@ class TransferSync(_PluginBase):
                                 ]
                             }
                         ]
+                    },
+                    # 文件浏览对话框
+                    {
+                        'component': 'VDialog',
+                        'props': {
+                            'model': 'file_browser_dialog',
+                            'maxWidth': '800px'
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'content': [
+                                    {
+                                        'component': 'VCardTitle',
+                                        'text': '选择目录'
+                                    },
+                                    {
+                                        'component': 'VCardText',
+                                        'content': [
+                                            {
+                                                'component': 'VTextField',
+                                                'props': {
+                                                    'model': 'current_browse_path',
+                                                    'label': '当前路径',
+                                                    'readonly': True
+                                                }
+                                            },
+                                            {
+                                                'component': 'VList',
+                                                'props': {
+                                                    'model': 'file_list_items'
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VListItem',
+                                                        'props': {
+                                                            'v-for': 'item in file_list_items',
+                                                            'key': 'item.path',
+                                                            'onclick': 'selectFileItem(item)'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'VListItemContent',
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'VListItemTitle',
+                                                                        'text': '{{ item.name }}'
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VCardActions',
+                                        'content': [
+                                            {
+                                                'component': 'VBtn',
+                                                'props': {
+                                                    'text': '取消',
+                                                    'onclick': 'closeBrowser'
+                                                }
+                                            },
+                                            {
+                                                'component': 'VBtn',
+                                                'props': {
+                                                    'text': '确定',
+                                                    'color': 'primary',
+                                                    'onclick': 'confirmPath'
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
                     }
                 ]
             }
@@ -556,15 +628,20 @@ class TransferSync(_PluginBase):
             "source_path": "",
             "target_path": "",
             "sync_paths": "",
+            "sync_type": "incremental",
+            "execution_mode": "immediate",
             "delay_minutes": 5,
             "enable_notifications": False,
             "sync_strategy": "copy",
-            "sync_mode": "immediate",
             "max_depth": -1,
             "file_filters": "",
             "exclude_patterns": "",
             "max_workers": 4,
-            "trigger_events": ["transfer.complete"]
+            "trigger_events": ["transfer.complete"],
+            "file_browser_dialog": False,
+            "current_browse_path": "",
+            "file_list_items": [],
+            "browse_type": ""
         }
 
     # API 端点方法
@@ -575,7 +652,8 @@ class TransferSync(_PluginBase):
                 "enabled": self._enabled,
                 "sync_paths_count": len(self._sync_paths),
                 "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
-                "sync_mode": self._sync_mode.value if hasattr(self._sync_mode, 'value') else str(self._sync_mode),
+                "sync_type": self._sync_type.value if hasattr(self._sync_type, 'value') else str(self._sync_type),
+                "execution_mode": self._execution_mode.value if hasattr(self._execution_mode, 'value') else str(self._execution_mode),
                 "delay_minutes": self._delay_minutes
             }
 
@@ -771,6 +849,10 @@ class TransferSync(_PluginBase):
             logger.error(f"浏览文件失败: {str(e)}")
             return {"error": str(e)}
 
+    def browse_path(self, path: str) -> Dict[str, Any]:
+        """浏览指定路径的API"""
+        return self.browse_files(path)
+
     def get_page(self) -> List[dict]:
         """获取插件页面"""
         return [
@@ -843,9 +925,14 @@ class TransferSync(_PluginBase):
             self._sync_strategy = SyncStrategy.COPY
 
         try:
-            self._sync_mode = SyncMode(config.get("sync_mode", "immediate"))
+            self._sync_type = SyncType(config.get("sync_type", "incremental"))
         except ValueError:
-            self._sync_mode = SyncMode.IMMEDIATE
+            self._sync_type = SyncType.INCREMENTAL
+
+        try:
+            self._execution_mode = ExecutionMode(config.get("execution_mode", "immediate"))
+        except ValueError:
+            self._execution_mode = ExecutionMode.IMMEDIATE
 
         self._max_depth = config.get("max_depth", -1)
         self._file_filters = self._parse_list_compatible(config.get("file_filters", ""))

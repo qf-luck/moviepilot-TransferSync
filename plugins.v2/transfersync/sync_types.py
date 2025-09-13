@@ -13,15 +13,15 @@ class SyncStrategy(Enum):
     SOFTLINK = "softlink"   # 软链接
 
 
-class SyncMode(Enum):
-    """同步模式"""
-    IMMEDIATE = "immediate"     # 立即执行（无延迟）
-    DELAYED = "delayed"        # 延迟执行
-
 class SyncType(Enum):
-    """同步类型"""
+    """同步类型策略"""
     INCREMENTAL = "incremental" # 增量同步（默认）
     FULL = "full"              # 全量同步
+
+class ExecutionMode(Enum):
+    """执行模式"""
+    IMMEDIATE = "immediate"     # 立即执行（无延迟）
+    DELAYED = "delayed"        # 延迟执行
 
 
 class FileFilterType(Enum):
