@@ -19,13 +19,229 @@ from .file_operations import AtomicFileOperation
 class SyncOperations:
     """同步操作核心类"""
     
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, plugin_instance):
+        self.plugin = plugin_instance
         self.sync_records = {}
         self.sync_progress = {}
         self.current_status = SyncStatus.IDLE
         self.sync_queue = []
         self.lock = threading.Lock()
+
+    def sync_directory(self, source_path: str) -> dict:
+        """
+        同步目录 - 主要入口方法
+        针对整理后的文件结构进行优化处理
+        """
+        result = {
+            'success': False,
+            'message': '',
+            'synced_files': 0,
+            'error_type': None
+        }
+        
+        try:
+            # 验证配置
+            if not self.plugin._sync_root_path or not self.plugin._sync_target_path:
+                result['message'] = "未配置同步路径"
+                result['error_type'] = "config_error"
+                return result
+            
+            # 验证源路径
+            source = Path(source_path)
+            if not source.exists():
+                result['message'] = f"源路径不存在: {source_path}"
+                result['error_type'] = "path_not_found"
+                return result
+            
+            # 检查是否在根路径下
+            root_path = Path(self.plugin._sync_root_path)
+            if not self._is_under_root_path(source, root_path):
+                result['message'] = f"路径不在根路径下: {source_path}"
+                result['error_type'] = "path_not_in_root"
+                return result
+            
+            # 开始同步
+            task_id = f"sync_{int(time.time())}"
+            self._update_progress(task_id, 0, 0, SyncStatus.RUNNING.value)
+            
+            # 识别整理后的文件结构
+            organized_items = self._identify_organized_content(source)
+            if not organized_items:
+                result['message'] = "没有找到需要同步的整理文件"
+                result['error_type'] = "no_content"
+                return result
+            
+            # 执行同步
+            target_base = Path(self.plugin._sync_target_path)
+            synced_count = self._sync_organized_content(organized_items, source, target_base, task_id)
+            
+            if synced_count > 0:
+                result['success'] = True
+                result['message'] = f"成功同步 {synced_count} 个项目"
+                result['synced_files'] = synced_count
+                
+                # 记录同步历史
+                self._record_sync_history(source_path, synced_count)
+            else:
+                result['message'] = "没有文件被同步"
+                result['error_type'] = "no_sync"
+            
+            self._update_progress(task_id, synced_count, synced_count, SyncStatus.COMPLETED.value)
+            
+        except SyncPermissionError as e:
+            result['message'] = str(e)
+            result['error_type'] = "permission_error"
+            logger.error(f"同步权限错误: {str(e)}")
+        except SyncSpaceError as e:
+            result['message'] = str(e)
+            result['error_type'] = "space_error"
+            logger.error(f"同步空间错误: {str(e)}")
+        except Exception as e:
+            result['message'] = f"同步失败: {str(e)}"
+            result['error_type'] = "unknown_error"
+            logger.error(f"同步目录失败: {str(e)}")
+            
+        return result
+
+    def _is_under_root_path(self, path: Path, root_path: Path) -> bool:
+        """检查路径是否在根路径下"""
+        try:
+            path.relative_to(root_path)
+            return True
+        except ValueError:
+            return False
+
+    def _identify_organized_content(self, source: Path) -> list:
+        """
+        识别整理后的内容结构
+        MoviePilot整理后通常有以下结构：
+        - 电影: Movie Name (Year)/files...
+        - 电视剧: TV Show Name/Season 01/files...
+        """
+        organized_items = []
+        
+        try:
+            if source.is_file():
+                # 单文件处理
+                if self._is_media_file(source):
+                    organized_items.append({
+                        'type': 'file',
+                        'path': source,
+                        'relative_path': source.name
+                    })
+            else:
+                # 目录处理 - 识别整理后的结构
+                for item in source.iterdir():
+                    if item.is_dir():
+                        # 检查是否为整理后的媒体目录
+                        if self._is_organized_media_directory(item):
+                            organized_items.append({
+                                'type': 'directory',
+                                'path': item,
+                                'relative_path': item.name
+                            })
+                    elif item.is_file() and self._is_media_file(item):
+                        # 媒体文件
+                        organized_items.append({
+                            'type': 'file', 
+                            'path': item,
+                            'relative_path': item.name
+                        })
+                        
+        except Exception as e:
+            logger.error(f"识别整理内容失败: {str(e)}")
+            
+        return organized_items
+
+    def _is_organized_media_directory(self, directory: Path) -> bool:
+        """判断是否为整理后的媒体目录"""
+        try:
+            # 检查目录名称模式
+            dir_name = directory.name
+            
+            # 电影模式: Name (Year)
+            if "(" in dir_name and ")" in dir_name:
+                return True
+                
+            # 电视剧模式: 包含Season目录或直接包含媒体文件
+            has_media_files = False
+            has_season_dirs = False
+            
+            for item in directory.iterdir():
+                if item.is_file() and self._is_media_file(item):
+                    has_media_files = True
+                elif item.is_dir() and ("season" in item.name.lower() or item.name.startswith("S")):
+                    has_season_dirs = True
+                    
+            return has_media_files or has_season_dirs
+            
+        except Exception:
+            return False
+
+    def _is_media_file(self, file_path: Path) -> bool:
+        """判断是否为媒体文件"""
+        media_extensions = {
+            '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm',
+            '.m4v', '.3gp', '.ts', '.m2ts', '.mts'
+        }
+        return file_path.suffix.lower() in media_extensions
+
+    def _sync_organized_content(self, organized_items: list, source_base: Path, target_base: Path, task_id: str) -> int:
+        """同步整理后的内容"""
+        synced_count = 0
+        total_items = len(organized_items)
+        
+        for i, item in enumerate(organized_items):
+            try:
+                source_path = item['path']
+                relative_path = item['relative_path']
+                target_path = target_base / relative_path
+                
+                if item['type'] == 'file':
+                    # 同步单个文件
+                    if self._execute_sync_strategy(source_path, target_path):
+                        synced_count += 1
+                elif item['type'] == 'directory':
+                    # 同步整个目录
+                    if self._sync_directory_recursive(source_path, target_path):
+                        synced_count += 1
+                        
+                # 更新进度
+                self._update_progress(task_id, i + 1, total_items, SyncStatus.RUNNING.value)
+                
+            except Exception as e:
+                logger.error(f"同步项目失败 {item['path']}: {str(e)}")
+                
+        return synced_count
+
+    def _sync_directory_recursive(self, source_dir: Path, target_dir: Path) -> bool:
+        """递归同步目录"""
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
+            for item in source_dir.rglob('*'):
+                if item.is_file():
+                    relative_path = item.relative_to(source_dir)
+                    target_file = target_dir / relative_path
+                    target_file.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    self._execute_sync_strategy(item, target_file)
+                    
+            return True
+        except Exception as e:
+            logger.error(f"递归同步目录失败 {source_dir}: {str(e)}")
+            return False
+
+    def _record_sync_history(self, source_path: str, synced_count: int):
+        """记录同步历史"""
+        with self.lock:
+            self.sync_records[source_path] = {
+                'sync_time': datetime.now(),
+                'source_path': source_path,
+                'target_path': self.plugin._sync_target_path,
+                'synced_files': synced_count,
+                'strategy': self.plugin._sync_strategy.value
+            }
     
     def sync_single_item(self, source_path: str):
         """同步单个文件或目录"""
@@ -155,7 +371,7 @@ class SyncOperations:
             # 确保目标目录存在
             target.parent.mkdir(parents=True, exist_ok=True)
             
-            strategy = self.config.get('sync_strategy', SyncStrategy.COPY)
+            strategy = self.plugin._sync_strategy
             
             # 如果目标文件已存在且内容相同，跳过同步
             if target.exists() and source.stat().st_size == target.stat().st_size:
@@ -197,8 +413,8 @@ class SyncOperations:
         """检查文件是否应该被同步"""
         # 文件大小检查
         file_size_mb = file_path.stat().st_size / (1024 * 1024)
-        min_size = self.config.get('min_file_size', 0)
-        max_size = self.config.get('max_file_size', 0)
+        min_size = self.plugin._min_file_size
+        max_size = self.plugin._max_file_size
         
         if min_size > 0 and file_size_mb < min_size:
             return False
@@ -206,12 +422,12 @@ class SyncOperations:
             return False
         
         # 文件扩展名检查
-        file_filters = self.config.get('file_filters', [])
+        file_filters = self.plugin._file_filters
         if file_filters and file_path.suffix.lower() not in [f.lower() for f in file_filters]:
             return False
         
         # 排除模式检查
-        exclude_patterns = self.config.get('exclude_patterns', [])
+        exclude_patterns = self.plugin._exclude_patterns
         for pattern in exclude_patterns:
             if pattern in str(file_path):
                 return False
@@ -221,7 +437,7 @@ class SyncOperations:
     def _get_filtered_files(self, directory: Path) -> List[Path]:
         """获取过滤后的文件列表"""
         files = []
-        max_depth = self.config.get('max_depth', -1)
+        max_depth = self.plugin._max_depth
         
         def collect_files(path: Path, current_depth: int = 0):
             if max_depth >= 0 and current_depth > max_depth:

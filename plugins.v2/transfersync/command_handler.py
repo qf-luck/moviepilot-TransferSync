@@ -1,5 +1,5 @@
 """
-命令处理模块
+命令处理模块 - 支持交互式按钮
 """
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -12,6 +12,7 @@ class CommandHandler:
     
     def __init__(self, plugin_instance):
         self.plugin = plugin_instance
+        self._register_message_action_handler()
     
     def get_command(self) -> List[Dict[str, Any]]:
         """获取插件命令列表"""
@@ -51,6 +52,24 @@ class CommandHandler:
                 "data": {
                     "action": "test_notification"
                 }
+            },
+            {
+                "cmd": "/transfersync_interactive",
+                "event": EventType.PluginAction,
+                "desc": "打开交互式控制面板",
+                "category": "TransferSync",
+                "data": {
+                    "action": "show_interactive_menu"
+                }
+            },
+            {
+                "cmd": "/transfersync_health",
+                "event": EventType.PluginAction,
+                "desc": "执行健康检查",
+                "category": "TransferSync",
+                "data": {
+                    "action": "health_check"
+                }
             }
         ]
     
@@ -65,6 +84,10 @@ class CommandHandler:
                 return self._handle_get_stats()
             elif action == "test_notification":
                 return self._handle_test_notification()
+            elif action == "show_interactive_menu":
+                return self._handle_show_interactive_menu(**kwargs)
+            elif action == "health_check":
+                return self._handle_health_check()
             else:
                 return {"success": False, "message": f"未知命令: {action}"}
         except Exception as e:
@@ -83,7 +106,8 @@ class CommandHandler:
                 "同步策略": self.plugin._sync_strategy.value,
                 "同步模式": self.plugin._sync_mode.value,
                 "监听事件": [event.value for event in self.plugin._trigger_events],
-                "同步路径数量": len(self.plugin._copy_paths)
+                "根路径": self.plugin._sync_root_path or "未设置",
+                "目标路径": self.plugin._sync_target_path or "未设置"
             }
             
             # 获取调度器状态
@@ -106,7 +130,7 @@ class CommandHandler:
             if not self.plugin._enabled:
                 return {"success": False, "message": "插件未启用"}
             
-            if not self.plugin._copy_paths:
+            if not self.plugin._sync_root_path or not self.plugin._sync_target_path:
                 return {"success": False, "message": "未配置同步路径"}
             
             if sync_type == "full":
@@ -182,6 +206,98 @@ class CommandHandler:
         except Exception as e:
             return {"success": False, "message": f"测试通知失败: {str(e)}"}
     
+    def _handle_show_interactive_menu(self, **kwargs) -> Dict[str, Any]:
+        """显示交互式菜单"""
+        try:
+            # 从kwargs中获取消息相关参数
+            channel = kwargs.get("channel")
+            source = kwargs.get("source") 
+            userid = kwargs.get("userid")
+            
+            if not channel:
+                return {"success": False, "message": "缺少必要的消息渠道信息"}
+            
+            # 发送主菜单
+            self._send_main_menu(channel, source, userid)
+            
+            return {
+                "success": True, 
+                "message": "交互式控制面板已打开，请在聊天界面中查看"
+            }
+        except Exception as e:
+            logger.error(f"显示交互式菜单失败: {str(e)}")
+            return {"success": False, "message": f"显示菜单失败: {str(e)}"}
+
+    def _handle_health_check(self) -> Dict[str, Any]:
+        """执行健康检查"""
+        try:
+            # 执行健康检查
+            health_result = self.plugin.health_checker.perform_health_check()
+            
+            # 格式化结果
+            status_emoji = {
+                'healthy': '✅',
+                'degraded': '⚠️',
+                'unhealthy': '❌',
+                'error': '💥'
+            }
+            
+            overall_status = health_result.get('overall_status', 'unknown')
+            emoji = status_emoji.get(overall_status, '❓')
+            
+            # 构建简要报告
+            summary = f"{emoji} 整体状态: {overall_status}\n"
+            
+            # 检查项摘要
+            checks = health_result.get('checks', {})
+            for check_name, check_result in checks.items():
+                check_status = '✅' if check_result.get('status') else '❌'
+                summary += f"{check_status} {check_name}\n"
+            
+            # 错误和警告
+            errors = health_result.get('errors', [])
+            warnings = health_result.get('warnings', [])
+            
+            if errors:
+                summary += f"\n❌ 错误 ({len(errors)}):\n"
+                for error in errors[:3]:  # 只显示前3个错误
+                    summary += f"• {error}\n"
+                if len(errors) > 3:
+                    summary += f"• ... 还有 {len(errors) - 3} 个错误\n"
+            
+            if warnings:
+                summary += f"\n⚠️ 警告 ({len(warnings)}):\n"
+                for warning in warnings[:3]:  # 只显示前3个警告
+                    summary += f"• {warning}\n"
+                if len(warnings) > 3:
+                    summary += f"• ... 还有 {len(warnings) - 3} 个警告\n"
+            
+            # 性能信息
+            performance = health_result.get('performance', {})
+            if performance:
+                summary += f"\n📊 性能指标:\n"
+                event_perf = performance.get('event_processing', {})
+                if event_perf:
+                    summary += f"• 事件成功率: {event_perf.get('success_rate', 0)}%\n"
+                    summary += f"• 平均处理时间: {event_perf.get('avg_processing_time', 0)}秒\n"
+            
+            check_duration = health_result.get('check_duration', 0)
+            summary += f"\n⏱️ 检查耗时: {check_duration:.2f}秒"
+            
+            return {
+                "success": True,
+                "message": "健康检查完成",
+                "data": {
+                    "overall_status": overall_status,
+                    "summary": summary,
+                    "full_report": health_result
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"健康检查失败: {str(e)}")
+            return {"success": False, "message": f"健康检查失败: {str(e)}"}
+
     def create_interactive_buttons(self, context: str = "main") -> List[Dict[str, Any]]:
         """创建交互式按钮"""
         buttons = []
@@ -243,3 +359,196 @@ class CommandHandler:
             return message
         except Exception as e:
             return f"❌ 响应格式化失败: {str(e)}"
+
+    def _register_message_action_handler(self):
+        """注册消息动作处理器"""
+        try:
+            eventmanager.register(EventType.MessageAction, self._handle_message_action)
+            logger.info("TransferSync消息动作处理器已注册")
+        except Exception as e:
+            logger.error(f"注册消息动作处理器失败: {str(e)}")
+
+    def _handle_message_action(self, event: Event):
+        """处理消息按钮回调"""
+        try:
+            event_data = event.event_data
+            if not event_data:
+                return
+
+            # 检查是否为本插件的回调
+            plugin_id = event_data.get("plugin_id")
+            if plugin_id != self.plugin.__class__.__name__:
+                return
+
+            # 获取回调数据
+            text = event_data.get("text", "")
+            channel = event_data.get("channel")
+            source = event_data.get("source")
+            userid = event_data.get("userid")
+            original_message_id = event_data.get("original_message_id")
+            original_chat_id = event_data.get("original_chat_id")
+
+            logger.info(f"收到TransferSync交互回调: {text}")
+
+            # 处理不同的交互回调
+            if text == "main_menu":
+                self._send_main_menu(channel, source, userid, original_message_id, original_chat_id)
+            elif text == "status":
+                self._send_status_info(channel, source, userid, original_message_id, original_chat_id)
+            elif text == "sync_menu":
+                self._send_sync_menu(channel, source, userid, original_message_id, original_chat_id)
+            elif text == "sync_incremental":
+                self._handle_sync_action("incremental", channel, source, userid, original_message_id, original_chat_id)
+            elif text == "sync_full":
+                self._handle_sync_action("full", channel, source, userid, original_message_id, original_chat_id)
+            elif text == "stats":
+                self._send_stats_info(channel, source, userid, original_message_id, original_chat_id)
+            elif text == "test_notification":
+                self._handle_test_notification_interactive(channel, source, userid, original_message_id, original_chat_id)
+            elif text == "back":
+                self._send_main_menu(channel, source, userid, original_message_id, original_chat_id)
+
+        except Exception as e:
+            logger.error(f"处理消息动作失败: {str(e)}")
+
+    def _send_main_menu(self, channel, source, userid, original_message_id=None, original_chat_id=None):
+        """发送主菜单"""
+        try:
+            buttons = [
+                [
+                    {"text": "📊 查看状态", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|status"},
+                    {"text": "🔄 同步管理", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|sync_menu"}
+                ],
+                [
+                    {"text": "📈 统计信息", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|stats"},
+                    {"text": "🔔 测试通知", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|test_notification"}
+                ]
+            ]
+
+            self.plugin.post_message(
+                channel=channel,
+                title="🔧 TransferSync 控制面板",
+                text="请选择要执行的操作：",
+                userid=userid,
+                buttons=buttons,
+                original_message_id=original_message_id,
+                original_chat_id=original_chat_id
+            )
+        except Exception as e:
+            logger.error(f"发送主菜单失败: {str(e)}")
+
+    def _send_status_info(self, channel, source, userid, original_message_id, original_chat_id):
+        """发送状态信息"""
+        try:
+            result = self._handle_get_status()
+            status_text = self.format_command_response(result)
+
+            buttons = [
+                [{"text": "🔙 返回主菜单", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|main_menu"}]
+            ]
+
+            self.plugin.post_message(
+                channel=channel,
+                title="📊 TransferSync 状态",
+                text=status_text,
+                userid=userid,
+                buttons=buttons,
+                original_message_id=original_message_id,
+                original_chat_id=original_chat_id
+            )
+        except Exception as e:
+            logger.error(f"发送状态信息失败: {str(e)}")
+
+    def _send_sync_menu(self, channel, source, userid, original_message_id, original_chat_id):
+        """发送同步菜单"""
+        try:
+            buttons = [
+                [
+                    {"text": "🔄 增量同步", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|sync_incremental"},
+                    {"text": "🔄 全量同步", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|sync_full"}
+                ],
+                [
+                    {"text": "🔙 返回主菜单", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|main_menu"}
+                ]
+            ]
+
+            self.plugin.post_message(
+                channel=channel,
+                title="🔄 同步管理",
+                text="选择同步类型：",
+                userid=userid,
+                buttons=buttons,
+                original_message_id=original_message_id,
+                original_chat_id=original_chat_id
+            )
+        except Exception as e:
+            logger.error(f"发送同步菜单失败: {str(e)}")
+
+    def _handle_sync_action(self, sync_type, channel, source, userid, original_message_id, original_chat_id):
+        """处理同步动作"""
+        try:
+            result = self._handle_trigger_sync(sync_type=sync_type)
+            response_text = self.format_command_response(result)
+
+            buttons = [
+                [
+                    {"text": "🔄 同步管理", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|sync_menu"},
+                    {"text": "🔙 返回主菜单", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|main_menu"}
+                ]
+            ]
+
+            self.plugin.post_message(
+                channel=channel,
+                title="✅ 同步操作完成",
+                text=response_text,
+                userid=userid,
+                buttons=buttons,
+                original_message_id=original_message_id,
+                original_chat_id=original_chat_id
+            )
+        except Exception as e:
+            logger.error(f"处理同步动作失败: {str(e)}")
+
+    def _send_stats_info(self, channel, source, userid, original_message_id, original_chat_id):
+        """发送统计信息"""
+        try:
+            result = self._handle_get_stats()
+            stats_text = self.format_command_response(result)
+
+            buttons = [
+                [{"text": "🔙 返回主菜单", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|main_menu"}]
+            ]
+
+            self.plugin.post_message(
+                channel=channel,
+                title="📈 TransferSync 统计",
+                text=stats_text,
+                userid=userid,
+                buttons=buttons,
+                original_message_id=original_message_id,
+                original_chat_id=original_chat_id
+            )
+        except Exception as e:
+            logger.error(f"发送统计信息失败: {str(e)}")
+
+    def _handle_test_notification_interactive(self, channel, source, userid, original_message_id, original_chat_id):
+        """处理测试通知（交互式）"""
+        try:
+            result = self._handle_test_notification()
+            response_text = self.format_command_response(result)
+
+            buttons = [
+                [{"text": "🔙 返回主菜单", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|main_menu"}]
+            ]
+
+            self.plugin.post_message(
+                channel=channel,
+                title="🔔 通知测试结果",
+                text=response_text,
+                userid=userid,
+                buttons=buttons,
+                original_message_id=original_message_id,
+                original_chat_id=original_chat_id
+            )
+        except Exception as e:
+            logger.error(f"处理测试通知失败: {str(e)}")

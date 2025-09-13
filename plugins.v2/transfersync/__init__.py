@@ -12,7 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import settings
 from app.core.event import Event, EventType, eventmanager
-from app.core.cache import cached, TTLCache
+from app.core.cache import cached, TTLCache, FileCache
 from app.plugins import _PluginBase
 from app.log import logger
 from app.schemas.types import NotificationType
@@ -36,6 +36,7 @@ from .sync_scheduler import SyncScheduler
 from .command_handler import CommandHandler
 from .widget_manager import WidgetManager
 from .workflow_actions import WorkflowActions
+from .health_checker import HealthChecker
 
 
 class TransferSync(_PluginBase):
@@ -60,7 +61,8 @@ class TransferSync(_PluginBase):
 
     # 私有属性
     _enabled = False
-    _copy_paths = []
+    _sync_root_path = ""  # 简化为单一根路径
+    _sync_target_path = ""  # 同步目标路径
     _enable_incremental = False
     _incremental_cron = "0 */6 * * *"
     _enable_full_sync = False
@@ -97,7 +99,8 @@ class TransferSync(_PluginBase):
             self._enabled = config.get("enabled", False)
 
             # 基础配置
-            self._copy_paths = self._parse_paths(config.get("copy_paths", ""))
+            self._sync_root_path = config.get("sync_root_path", "")
+            self._sync_target_path = config.get("sync_target_path", "")
             self._enable_incremental = config.get("enable_incremental", False)
             self._incremental_cron = config.get("incremental_cron", "0 */6 * * *")
             self._enable_full_sync = config.get("enable_full_sync", False)
@@ -165,6 +168,7 @@ class TransferSync(_PluginBase):
         self._command_handler = None
         self._widget_manager = None
         self._workflow_actions = None
+        self._health_checker = None
 
         # 注册事件监听器
         if self._enabled:
@@ -216,11 +220,12 @@ class TransferSync(_PluginBase):
             self._workflow_actions = WorkflowActions(self)
         return self._workflow_actions
 
-    def _parse_paths(self, paths_str: str) -> List[str]:
-        """解析路径字符串"""
-        if not paths_str:
-            return []
-        return [path.strip() for path in paths_str.split('\n') if path.strip()]
+    @property
+    def health_checker(self):
+        """延迟初始化健康检查器"""
+        if self._health_checker is None:
+            self._health_checker = HealthChecker(self)
+        return self._health_checker
 
     def _parse_list(self, list_str: str, separator: str = ',') -> List[str]:
         """解析列表字符串"""
@@ -245,14 +250,17 @@ class TransferSync(_PluginBase):
         
         return conditions
 
+    @cached(region="transfersync_config", ttl=300, skip_none=True)
     def _validate_config(self):
-        """验证配置"""
+        """验证配置（带缓存）"""
         if self._validator:
             validation_result = self._validator.validate_all_config(self._get_config_dict())
             if not validation_result.get('valid', True):
                 logger.warning(f"配置验证警告: {validation_result.get('warnings', [])}")
                 if validation_result.get('errors'):
                     logger.error(f"配置验证错误: {validation_result.get('errors', [])}")
+            return validation_result
+        return {"valid": True}
 
     def get_state(self) -> bool:
         return self._enabled
@@ -267,15 +275,38 @@ class TransferSync(_PluginBase):
             # 取消事件监听
             self._unregister_event_listeners()
             
+            # 清理缓存
+            self._clear_plugin_cache()
+            
             logger.info("TransferSync服务已停止")
         except Exception as e:
             logger.error(f"停止TransferSync服务失败: {str(e)}")
+
+    def _clear_plugin_cache(self):
+        """清理插件缓存"""
+        try:
+            # 清理方法级缓存
+            if hasattr(self._validate_config, 'cache_clear'):
+                self._validate_config.cache_clear()
+            if hasattr(self._get_directories, 'cache_clear'):
+                self._get_directories.cache_clear()
+            if hasattr(self._get_notification_options, 'cache_clear'):
+                self._get_notification_options.cache_clear()
+            
+            # 清理本地TTL缓存
+            if self._local_cache:
+                self._local_cache.clear()
+                
+            logger.info("插件缓存已清理")
+        except Exception as e:
+            logger.error(f"清理插件缓存失败: {str(e)}")
 
     def _get_config_dict(self) -> Dict:
         """获取配置字典"""
         return {
             "enabled": self._enabled,
-            "copy_paths": '\n'.join(self._copy_paths),
+            "sync_root_path": self._sync_root_path,
+            "sync_target_path": self._sync_target_path,
             "enable_incremental": self._enable_incremental,
             "incremental_cron": self._incremental_cron,
             "enable_full_sync": self._enable_full_sync,
@@ -374,7 +405,19 @@ class TransferSync(_PluginBase):
 
     def _on_plugin_triggered(self, event: Event):
         """插件触发事件处理"""
-        self._handle_event(event, TriggerEvent.PLUGIN_TRIGGERED)
+        # 检查是否为命令事件
+        if event.event_data and 'action' in event.event_data:
+            action = event.event_data.get('action')
+            # 使用命令处理器处理命令
+            result = self.command_handler.handle_command(action, **event.event_data)
+            
+            # 发送响应消息
+            if event.event_data.get('channel'):
+                response_text = self.command_handler.format_command_response(result)
+                self._send_notification("TransferSync 命令响应", response_text)
+        else:
+            # 其他插件触发事件按原逻辑处理
+            self._handle_event(event, TriggerEvent.PLUGIN_TRIGGERED)
 
     def _handle_event(self, event: Event, event_type: TriggerEvent):
         """统一事件处理方法"""
@@ -554,7 +597,11 @@ class TransferSync(_PluginBase):
                     },
                     {
                         "component": "VCardText",
-                        "text": f"同步路径: {len(self._copy_paths)} 个"
+                        "text": f"根路径: {self._sync_root_path or '未设置'}"
+                    },
+                    {
+                        "component": "VCardText",
+                        "text": f"目标路径: {self._sync_target_path or '未设置'}"
                     }
                 ]
             }
@@ -585,19 +632,18 @@ class TransferSync(_PluginBase):
             # 如果通知管理器还未初始化，直接调用属性来初始化
             self.notification_manager.send_notification(title, text, image)
 
+    @cached(region="transfersync_dirs", ttl=60, skip_none=True)
     def _get_directories(self, path: str = "/") -> List[Dict[str, Any]]:
-        """获取目录列表"""
+        """获取目录列表（带缓存）"""
         try:
             return self._storage_helper.get_directories(path)
         except Exception as e:
             logger.error(f"获取目录列表失败: {str(e)}")
             return []
 
-    def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """
-        拼装插件配置页面，需要返回两块数据：1、页面配置；2、数据结构
-        """
-        # 获取可用的通知渠道
+    @cached(region="transfersync_notification", ttl=300, skip_none=True)
+    def _get_notification_options(self) -> List[Dict[str, str]]:
+        """获取通知渠道选项（带缓存）"""
         notification_options = []
         try:
             available_channels = self.notification_manager.get_available_channels()
@@ -608,6 +654,14 @@ class TransferSync(_PluginBase):
             ]
         except Exception as e:
             logger.error(f"获取通知渠道失败: {str(e)}")
+        return notification_options
+
+    def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
+        """
+        拼装插件配置页面，需要返回两块数据：1、页面配置；2、数据结构
+        """
+        # 获取可用的通知渠道
+        notification_options = self._get_notification_options()
 
         return [
             {
@@ -637,160 +691,267 @@ class TransferSync(_PluginBase):
                         ]
                     },
                     {
-                        'component': 'VRow',
+                        'component': 'VCard',
+                        'props': {
+                            'variant': 'outlined',
+                            'class': 'mb-4'
+                        },
                         'content': [
                             {
-                                'component': 'VCol',
+                                'component': 'VCardTitle',
                                 'props': {
-                                    'cols': 12
+                                    'class': 'text-subtitle-1 font-weight-bold'
                                 },
+                                'text': '📁 路径配置'
+                            },
+                            {
+                                'component': 'VCardText',
                                 'content': [
                                     {
-                                        'component': 'VTextarea',
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VTextField',
+                                                        'props': {
+                                                            'model': 'sync_root_path',
+                                                            'label': '📥 同步根路径',
+                                                            'placeholder': '/media/downloads',
+                                                            'hint': '整理完成后的文件所在根目录（监听路径）',
+                                                            'persistent-hint': True,
+                                                            'prepend-inner-icon': 'mdi-folder-open',
+                                                            'variant': 'outlined',
+                                                            'clearable': True
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VTextField',
+                                                        'props': {
+                                                            'model': 'sync_target_path',
+                                                            'label': '📤 同步目标路径',
+                                                            'placeholder': '/media/backup',
+                                                            'hint': '文件同步到的目标目录（备份路径）',
+                                                            'persistent-hint': True,
+                                                            'prepend-inner-icon': 'mdi-folder-sync',
+                                                            'variant': 'outlined',
+                                                            'clearable': True
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VAlert',
                                         'props': {
-                                            'model': 'copy_paths',
-                                            'label': '同步路径',
-                                            'placeholder': '每行一个路径，支持绝对路径和相对路径',
-                                            'hint': '设置需要同步的源路径，每行一个',
-                                            'persistent-hint': True,
-                                            'rows': 3
-                                        }
+                                            'type': 'info',
+                                            'variant': 'tonal',
+                                            'class': 'mt-2'
+                                        },
+                                        'text': '💡 提示：插件会监听根路径下的整理完成事件，自动将整理后的文件同步到目标路径'
                                     }
                                 ]
                             }
                         ]
                     },
                     {
-                        'component': 'VRow',
+                        'component': 'VCard',
+                        'props': {
+                            'variant': 'outlined',
+                            'class': 'mb-4'
+                        },
                         'content': [
                             {
-                                'component': 'VCol',
+                                'component': 'VCardTitle',
                                 'props': {
-                                    'cols': 12,
-                                    'md': 6
+                                    'class': 'text-subtitle-1 font-weight-bold'
                                 },
-                                'content': [
-                                    {
-                                        'component': 'VSelect',
-                                        'props': {
-                                            'model': 'sync_strategy',
-                                            'label': '同步策略',
-                                            'items': [
-                                                {'title': '复制', 'value': 'copy'},
-                                                {'title': '移动', 'value': 'move'},
-                                                {'title': '硬链接', 'value': 'hardlink'},
-                                                {'title': '软链接', 'value': 'softlink'}
-                                            ],
-                                            'hint': '选择文件同步的策略',
-                                            'persistent-hint': True
-                                        }
-                                    }
-                                ]
+                                'text': '⚙️ 同步设置'
                             },
                             {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
+                                'component': 'VCardText',
                                 'content': [
                                     {
-                                        'component': 'VSelect',
-                                        'props': {
-                                            'model': 'sync_mode',
-                                            'label': '同步模式',
-                                            'items': [
-                                                {'title': '立即同步', 'value': 'immediate'},
-                                                {'title': '批量同步', 'value': 'batch'},
-                                                {'title': '队列同步', 'value': 'queue'}
-                                            ],
-                                            'hint': '选择同步执行模式',
-                                            'persistent-hint': True
-                                        }
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VSelect',
+                                                        'props': {
+                                                            'model': 'sync_strategy',
+                                                            'label': '🔄 同步策略',
+                                                            'items': [
+                                                                {'title': '📄 复制 - 保留原文件', 'value': 'copy'},
+                                                                {'title': '🚚 移动 - 移动原文件', 'value': 'move'},
+                                                                {'title': '🔗 硬链接 - 节省空间', 'value': 'hardlink'},
+                                                                {'title': '🔁 软链接 - 创建快捷方式', 'value': 'softlink'}
+                                                            ],
+                                                            'hint': '选择文件同步策略，硬链接最节省空间',
+                                                            'persistent-hint': True,
+                                                            'variant': 'outlined',
+                                                            'prepend-inner-icon': 'mdi-cog'
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VSelect',
+                                                        'props': {
+                                                            'model': 'sync_mode',
+                                                            'label': '⚡ 同步模式',
+                                                            'items': [
+                                                                {'title': '⚡ 立即同步 - 实时处理', 'value': 'immediate'},
+                                                                {'title': '📦 批量同步 - 分批处理', 'value': 'batch'},
+                                                                {'title': '📋 队列同步 - 队列处理', 'value': 'queue'}
+                                                            ],
+                                                            'hint': '选择同步执行模式，立即模式响应最快',
+                                                            'persistent-hint': True,
+                                                            'variant': 'outlined',
+                                                            'prepend-inner-icon': 'mdi-flash'
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     }
                                 ]
                             }
                         ]
                     },
                     {
-                        'component': 'VRow',
+                        'component': 'VCard',
+                        'props': {
+                            'variant': 'outlined',
+                            'class': 'mb-4'
+                        },
                         'content': [
                             {
-                                'component': 'VCol',
+                                'component': 'VCardTitle',
                                 'props': {
-                                    'cols': 12,
-                                    'md': 6
+                                    'class': 'text-subtitle-1 font-weight-bold'
                                 },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_incremental',
-                                            'label': '启用增量同步',
-                                            'hint': '定时执行增量同步任务',
-                                            'persistent-hint': True
-                                        }
-                                    }
-                                ]
+                                'text': '⏰ 定时任务'
                             },
                             {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
+                                'component': 'VCardText',
                                 'content': [
                                     {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'incremental_cron',
-                                            'label': '增量同步周期',
-                                            'placeholder': '0 */6 * * *',
-                                            'hint': '使用Cron表达式设置执行周期',
-                                            'persistent-hint': True
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VSwitch',
+                                                        'props': {
+                                                            'model': 'enable_incremental',
+                                                            'label': '📈 启用增量同步',
+                                                            'hint': '定时检查并同步新增/更新的文件',
+                                                            'persistent-hint': True,
+                                                            'color': 'primary'
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VTextField',
+                                                        'props': {
+                                                            'model': 'incremental_cron',
+                                                            'label': '🕐 增量同步周期',
+                                                            'placeholder': '0 */6 * * *',
+                                                            'hint': 'Cron表达式，默认每6小时执行一次',
+                                                            'persistent-hint': True,
+                                                            'variant': 'outlined',
+                                                            'prepend-inner-icon': 'mdi-clock-outline'
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
                                     {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_full_sync',
-                                            'label': '启用全量同步',
-                                            'hint': '定时执行全量同步任务',
-                                            'persistent-hint': True
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'full_sync_cron',
-                                            'label': '全量同步周期',
-                                            'placeholder': '0 2 * * 0',
-                                            'hint': '使用Cron表达式设置执行周期',
-                                            'persistent-hint': True
-                                        }
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VSwitch',
+                                                        'props': {
+                                                            'model': 'enable_full_sync',
+                                                            'label': '🔄 启用全量同步',
+                                                            'hint': '定时执行完整的全量同步任务',
+                                                            'persistent-hint': True,
+                                                            'color': 'primary'
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VTextField',
+                                                        'props': {
+                                                            'model': 'full_sync_cron',
+                                                            'label': '🕕 全量同步周期',
+                                                            'placeholder': '0 2 * * 0',
+                                                            'hint': 'Cron表达式，默认每周日凌晨2点执行',
+                                                            'persistent-hint': True,
+                                                            'variant': 'outlined',
+                                                            'prepend-inner-icon': 'mdi-clock-outline'
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     }
                                 ]
                             }
@@ -878,7 +1039,8 @@ class TransferSync(_PluginBase):
             }
         ], {
             "enabled": False,
-            "copy_paths": "",
+            "sync_root_path": "",
+            "sync_target_path": "",
             "sync_strategy": "copy",
             "sync_mode": "immediate",
             "enable_incremental": False,
