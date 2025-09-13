@@ -24,7 +24,7 @@ from app.plugins import _PluginBase
 from app.schemas import NotificationType
 from app.schemas.types import EventType
 
-class Cd2Assistant(_PluginBase):
+class TransferSync(_PluginBase):
     # 插件名称
     plugin_name = "CloudDrive2助手"
     # 插件描述
