@@ -62,6 +62,18 @@ class Cd2Tool(_PluginBase):
     _scheduler: Optional[BackgroundScheduler] = None
 
     def init_plugin(self, config: dict = None):
+        # 检查版本兼容性
+        try:
+            if hasattr(settings, 'VERSION_FLAG'):
+                version = settings.VERSION_FLAG  # V2
+                logger.info("检测到MoviePilot V2版本")
+            else:
+                version = "v1"
+                logger.info("检测到MoviePilot V1版本")
+        except Exception as e:
+            logger.warning(f"版本检测失败: {e}")
+            version = "unknown"
+        
         # 检查 clouddrive 依赖是否可用
         if not CLOUDDRIVE_AVAILABLE:
             logger.error("Cd2助手启动失败：缺少 clouddrive 依赖库")
