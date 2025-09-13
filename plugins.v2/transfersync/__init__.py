@@ -31,7 +31,7 @@ class TransferSync(_PluginBase):
     # 插件名称
     plugin_name = "整理后同步"
     # 插件描述
-    plugin_desc = "监听可选择的多种事件类型，根据过滤条件自动同步文件到指定位置，支持多种同步策略、事件统计监控、增量和全量同步。"
+    plugin_desc = "监听多种事件类型自动同步文件到指定位置，支持多种同步策略，默认启用增量同步，简化配置更易使用。"
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/sync.png"
     # 插件版本
@@ -67,28 +67,19 @@ class TransferSync(_PluginBase):
         self._enabled = False
         self._lock = threading.Lock()
 
-        # 配置属性 - 从配置管理器解析后设置
+        # 配置属性 - 简化版本，移除不必要的选项
         self._sync_paths = []  # 多路径支持
         self._delay_minutes = 5
         self._enable_immediate_execution = True
-        self._enable_incremental = False
-        self._incremental_cron = "0 */6 * * *"
-        self._enable_full_sync = False
-        self._full_sync_cron = "0 2 * * 0"
+        self._incremental_cron = "0 */6 * * *"  # 默认启用增量同步
         self._enable_notifications = False
-        self._notification_channels = []
         self._sync_strategy = SyncStrategy.COPY
         self._sync_mode = SyncMode.IMMEDIATE
         self._max_depth = -1
         self._file_filters = []
         self._exclude_patterns = []
-        self._max_file_size = 0
-        self._min_file_size = 0
-        self._enable_progress = True
         self._max_workers = 4
-        self._batch_size = 100
         self._trigger_events = [TriggerEvent.TRANSFER_COMPLETE]
-        self._event_conditions = {}
 
         # 初始化功能模块
         self._sync_ops = None
@@ -125,29 +116,20 @@ class TransferSync(_PluginBase):
             logger.error(f"TransferSync插件初始化失败: {str(e)}")
 
     def _apply_config(self, config: Dict[str, Any]):
-        """应用解析后的配置"""
+        """应用解析后的配置 - 简化版本"""
         self._enabled = config.get("enabled", False)
         self._sync_paths = config.get("sync_paths", [])
         self._delay_minutes = config.get("delay_minutes", 5)
         self._enable_immediate_execution = config.get("enable_immediate_execution", True)
-        self._enable_incremental = config.get("enable_incremental", False)
         self._incremental_cron = config.get("incremental_cron", "0 */6 * * *")
-        self._enable_full_sync = config.get("enable_full_sync", False)
-        self._full_sync_cron = config.get("full_sync_cron", "0 2 * * 0")
         self._enable_notifications = config.get("enable_notifications", False)
-        self._notification_channels = config.get("notification_channels", [])
         self._sync_strategy = config.get("sync_strategy", SyncStrategy.COPY)
         self._sync_mode = config.get("sync_mode", SyncMode.IMMEDIATE)
         self._max_depth = config.get("max_depth", -1)
         self._file_filters = config.get("file_filters", [])
         self._exclude_patterns = config.get("exclude_patterns", [])
-        self._max_file_size = config.get("max_file_size", 0)
-        self._min_file_size = config.get("min_file_size", 0)
-        self._enable_progress = config.get("enable_progress", True)
         self._max_workers = config.get("max_workers", 4)
-        self._batch_size = config.get("batch_size", 100)
         self._trigger_events = config.get("trigger_events", [TriggerEvent.TRANSFER_COMPLETE])
-        self._event_conditions = config.get("event_conditions", {})
 
     @property
     def command_handler(self):
@@ -176,19 +158,13 @@ class TransferSync(_PluginBase):
     # 配置表单相关方法
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
-        """获取插件命令 - 参考 p115strmhelper 的丰富命令"""
+        """获取插件命令 - 简化版本"""
         return [
             {
                 "action": "manual_sync",
                 "name": "手动同步",
                 "icon": "mdi-sync",
                 "desc": "立即执行手动同步操作"
-            },
-            {
-                "action": "full_sync",
-                "name": "全量同步",
-                "icon": "mdi-sync-circle",
-                "desc": "执行全量同步，同步所有配置的路径"
             },
             {
                 "action": "incremental_sync",
@@ -203,27 +179,15 @@ class TransferSync(_PluginBase):
                 "desc": "查看当前同步状态和统计信息"
             },
             {
-                "action": "clear_cache",
-                "name": "清理缓存",
-                "icon": "mdi-cached",
-                "desc": "清理插件缓存和临时数据"
-            },
-            {
                 "action": "test_paths",
                 "name": "测试路径",
                 "icon": "mdi-test-tube",
                 "desc": "测试同步路径的可访问性和权限"
-            },
-            {
-                "action": "health_check",
-                "name": "健康检查",
-                "icon": "mdi-heart-pulse",
-                "desc": "检查插件和依赖的健康状态"
             }
         ]
 
     def get_api(self) -> List[Dict[str, Any]]:
-        """获取插件API - 参考 p115strmhelper 的丰富API"""
+        """获取插件API - 简化版本"""
         return [
             {
                 "path": "/sync_status",
@@ -240,13 +204,6 @@ class TransferSync(_PluginBase):
                 "description": "立即执行手动同步操作"
             },
             {
-                "path": "/full_sync",
-                "endpoint": self.full_sync,
-                "methods": ["POST"],
-                "summary": "全量同步",
-                "description": "执行全量同步，同步所有配置的路径"
-            },
-            {
                 "path": "/incremental_sync",
                 "endpoint": self.incremental_sync,
                 "methods": ["POST"],
@@ -259,94 +216,78 @@ class TransferSync(_PluginBase):
                 "methods": ["GET"],
                 "summary": "测试路径",
                 "description": "测试同步路径的可访问性和权限"
-            },
-            {
-                "path": "/clear_cache",
-                "endpoint": self.clear_cache,
-                "methods": ["POST"],
-                "summary": "清理缓存",
-                "description": "清理插件缓存和临时数据"
-            },
-            {
-                "path": "/health_check",
-                "endpoint": self.health_check,
-                "methods": ["GET"],
-                "summary": "健康检查",
-                "description": "检查插件和依赖的健康状态"
-            },
-            {
-                "path": "/get_config",
-                "endpoint": self.get_config,
-                "methods": ["GET"],
-                "auth": "bear",
-                "summary": "获取配置",
-                "description": "获取当前插件配置信息"
-            },
-            {
-                "path": "/save_config",
-                "endpoint": self.save_config,
-                "methods": ["POST"],
-                "auth": "bear",
-                "summary": "保存配置",
-                "description": "保存插件配置设置"
             }
         ]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """获取配置表单 - 参考 p115strmhelper 的丰富配置"""
+        """获取配置表单 - 简化版本，移除不必要的选项"""
         return [
-            # 基础配置
             {
-                'component': 'VForm',
+                'component': 'div',
+                'props': {
+                    'class': 'form-container'
+                },
                 'content': [
+                    # 插件说明
                     {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
-                                'content': [
-                                    {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'info',
-                                            'variant': 'tonal',
-                                            'text': '整理后同步插件 - 监听事件自动同步文件到指定位置，支持多种同步策略和事件类型'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
+                        'component': 'div',
+                        'props': {
+                            'class': 'alert alert-info'
+                        },
+                        'text': '整理后同步插件 - 监听事件自动同步文件到指定位置，默认启用增量同步'
                     },
                     # 基础开关
                     {
-                        'component': 'VRow',
+                        'component': 'div',
+                        'props': {
+                            'class': 'form-row'
+                        },
                         'content': [
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'component': 'div',
+                                'props': {
+                                    'class': 'form-group'
+                                },
                                 'content': [
                                     {
-                                        'component': 'VSwitch',
+                                        'component': 'input',
                                         'props': {
-                                            'model': 'enabled',
-                                            'label': '启用插件',
-                                            'hint': '开启后将监听事件并自动同步'
+                                            'type': 'checkbox',
+                                            'id': 'enabled',
+                                            'name': 'enabled',
+                                            'value': True
                                         }
+                                    },
+                                    {
+                                        'component': 'label',
+                                        'props': {
+                                            'for': 'enabled'
+                                        },
+                                        'text': '启用插件'
                                     }
                                 ]
                             },
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'component': 'div',
+                                'props': {
+                                    'class': 'form-group'
+                                },
                                 'content': [
                                     {
-                                        'component': 'VSwitch',
+                                        'component': 'input',
                                         'props': {
-                                            'model': 'enable_notifications',
-                                            'label': '启用通知',
-                                            'hint': '开启后将发送同步状态通知'
+                                            'type': 'checkbox',
+                                            'id': 'enable_notifications',
+                                            'name': 'enable_notifications',
+                                            'value': False
                                         }
+                                    },
+                                    {
+                                        'component': 'label',
+                                        'props': {
+                                            'for': 'enable_notifications'
+                                        },
+                                        'text': '启用通知'
                                     }
                                 ]
                             }
@@ -354,66 +295,140 @@ class TransferSync(_PluginBase):
                     },
                     # 同步路径配置
                     {
-                        'component': 'VRow',
+                        'component': 'div',
+                        'props': {
+                            'class': 'form-group'
+                        },
                         'content': [
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
-                                'content': [
-                                    {
-                                        'component': 'VTextarea',
-                                        'props': {
-                                            'model': 'sync_paths',
-                                            'label': '同步路径配置',
-                                            'placeholder': '源路径1->目标路径1\n源路径2->目标路径2\n或用逗号分隔：源路径1->目标路径1,源路径2->目标路径2',
-                                            'hint': '支持多组同步路径配置，格式：源路径->目标路径 或 源路径::目标路径',
-                                            'rows': 4
-                                        }
-                                    }
-                                ]
+                                'component': 'label',
+                                'props': {
+                                    'for': 'sync_paths'
+                                },
+                                'text': '同步路径配置'
+                            },
+                            {
+                                'component': 'textarea',
+                                'props': {
+                                    'id': 'sync_paths',
+                                    'name': 'sync_paths',
+                                    'rows': 4,
+                                    'placeholder': '源路径1->目标路径1\n源路径2->目标路径2\n或用逗号分隔多组配置',
+                                    'class': 'form-control'
+                                }
+                            },
+                            {
+                                'component': 'small',
+                                'props': {
+                                    'class': 'form-text text-muted'
+                                },
+                                'text': '支持多组同步路径配置，格式：源路径->目标路径 或 源路径::目标路径'
                             }
                         ]
                     },
                     # 基础配置
                     {
-                        'component': 'VRow',
+                        'component': 'div',
+                        'props': {
+                            'class': 'form-row'
+                        },
                         'content': [
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'component': 'div',
+                                'props': {
+                                    'class': 'form-group col-md-6'
+                                },
                                 'content': [
                                     {
-                                        'component': 'VSelect',
+                                        'component': 'label',
                                         'props': {
-                                            'model': 'sync_strategy',
-                                            'label': '同步策略',
-                                            'items': [
-                                                {'title': '复制文件', 'value': 'copy'},
-                                                {'title': '移动文件', 'value': 'move'},
-                                                {'title': '软链接', 'value': 'softlink'},
-                                                {'title': '硬链接', 'value': 'hardlink'}
-                                            ],
-                                            'hint': '选择文件同步的方式'
-                                        }
+                                            'for': 'sync_strategy'
+                                        },
+                                        'text': '同步策略'
+                                    },
+                                    {
+                                        'component': 'select',
+                                        'props': {
+                                            'id': 'sync_strategy',
+                                            'name': 'sync_strategy',
+                                            'class': 'form-control'
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'option',
+                                                'props': {
+                                                    'value': 'copy'
+                                                },
+                                                'text': '复制文件'
+                                            },
+                                            {
+                                                'component': 'option',
+                                                'props': {
+                                                    'value': 'move'
+                                                },
+                                                'text': '移动文件'
+                                            },
+                                            {
+                                                'component': 'option',
+                                                'props': {
+                                                    'value': 'softlink'
+                                                },
+                                                'text': '软链接'
+                                            },
+                                            {
+                                                'component': 'option',
+                                                'props': {
+                                                    'value': 'hardlink'
+                                                },
+                                                'text': '硬链接'
+                                            }
+                                        ]
                                     }
                                 ]
                             },
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'component': 'div',
+                                'props': {
+                                    'class': 'form-group col-md-6'
+                                },
                                 'content': [
                                     {
-                                        'component': 'VSelect',
+                                        'component': 'label',
                                         'props': {
-                                            'model': 'sync_mode',
-                                            'label': '同步模式',
-                                            'items': [
-                                                {'title': '立即同步', 'value': 'immediate'},
-                                                {'title': '批量同步', 'value': 'batch'},
-                                                {'title': '队列同步', 'value': 'queue'}
-                                            ],
-                                            'hint': '选择同步执行模式'
-                                        }
+                                            'for': 'sync_mode'
+                                        },
+                                        'text': '同步模式'
+                                    },
+                                    {
+                                        'component': 'select',
+                                        'props': {
+                                            'id': 'sync_mode',
+                                            'name': 'sync_mode',
+                                            'class': 'form-control'
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'option',
+                                                'props': {
+                                                    'value': 'immediate'
+                                                },
+                                                'text': '立即同步'
+                                            },
+                                            {
+                                                'component': 'option',
+                                                'props': {
+                                                    'value': 'batch'
+                                                },
+                                                'text': '批量同步'
+                                            },
+                                            {
+                                                'component': 'option',
+                                                'props': {
+                                                    'value': 'queue'
+                                                },
+                                                'text': '队列同步'
+                                            }
+                                        ]
                                     }
                                 ]
                             }
@@ -421,137 +436,254 @@ class TransferSync(_PluginBase):
                     },
                     # 触发事件配置
                     {
-                        'component': 'VRow',
+                        'component': 'div',
+                        'props': {
+                            'class': 'form-group'
+                        },
                         'content': [
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
+                                'component': 'label',
+                                'props': {
+                                    'for': 'trigger_events'
+                                },
+                                'text': '触发事件'
+                            },
+                            {
+                                'component': 'select',
+                                'props': {
+                                    'id': 'trigger_events',
+                                    'name': 'trigger_events',
+                                    'multiple': True,
+                                    'class': 'form-control'
+                                },
                                 'content': [
                                     {
-                                        'component': 'VSelect',
+                                        'component': 'option',
                                         'props': {
-                                            'model': 'trigger_events',
-                                            'label': '触发事件',
-                                            'items': [
-                                                {'title': '整理完成', 'value': 'transfer.complete'},
-                                                {'title': '下载添加', 'value': 'download.added'},
-                                                {'title': '订阅完成', 'value': 'subscribe.complete'},
-                                                {'title': '媒体添加', 'value': 'media.added'},
-                                                {'title': '文件移动', 'value': 'file.moved'},
-                                                {'title': '目录扫描完成', 'value': 'directory.scan.complete'},
-                                                {'title': '刮削完成', 'value': 'scrape.complete'},
-                                                {'title': '插件触发', 'value': 'plugin.triggered'}
-                                            ],
-                                            'multiple': True,
-                                            'hint': '选择触发同步的事件类型'
-                                        }
+                                            'value': 'transfer.complete'
+                                        },
+                                        'text': '整理完成'
+                                    },
+                                    {
+                                        'component': 'option',
+                                        'props': {
+                                            'value': 'download.added'
+                                        },
+                                        'text': '下载添加'
+                                    },
+                                    {
+                                        'component': 'option',
+                                        'props': {
+                                            'value': 'subscribe.complete'
+                                        },
+                                        'text': '订阅完成'
+                                    },
+                                    {
+                                        'component': 'option',
+                                        'props': {
+                                            'value': 'media.added'
+                                        },
+                                        'text': '媒体添加'
+                                    },
+                                    {
+                                        'component': 'option',
+                                        'props': {
+                                            'value': 'file.moved'
+                                        },
+                                        'text': '文件移动'
+                                    },
+                                    {
+                                        'component': 'option',
+                                        'props': {
+                                            'value': 'directory.scan.complete'
+                                        },
+                                        'text': '目录扫描完成'
+                                    },
+                                    {
+                                        'component': 'option',
+                                        'props': {
+                                            'value': 'scrape.complete'
+                                        },
+                                        'text': '刮削完成'
+                                    },
+                                    {
+                                        'component': 'option',
+                                        'props': {
+                                            'value': 'plugin.triggered'
+                                        },
+                                        'text': '插件触发'
                                     }
                                 ]
+                            },
+                            {
+                                'component': 'small',
+                                'props': {
+                                    'class': 'form-text text-muted'
+                                },
+                                'text': '按住Ctrl键可选择多个事件类型'
                             }
                         ]
                     },
                     # 执行设置
                     {
-                        'component': 'VRow',
+                        'component': 'div',
+                        'props': {
+                            'class': 'form-row'
+                        },
                         'content': [
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'component': 'div',
+                                'props': {
+                                    'class': 'form-group col-md-6'
+                                },
                                 'content': [
                                     {
-                                        'component': 'VSwitch',
+                                        'component': 'input',
                                         'props': {
-                                            'model': 'enable_immediate_execution',
-                                            'label': '启用立即执行',
-                                            'hint': '开启后将立即执行同步，否则根据延迟时间执行'
+                                            'type': 'checkbox',
+                                            'id': 'enable_immediate_execution',
+                                            'name': 'enable_immediate_execution',
+                                            'value': True
                                         }
+                                    },
+                                    {
+                                        'component': 'label',
+                                        'props': {
+                                            'for': 'enable_immediate_execution'
+                                        },
+                                        'text': '启用立即执行'
                                     }
                                 ]
                             },
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'component': 'div',
+                                'props': {
+                                    'class': 'form-group col-md-6'
+                                },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'label',
                                         'props': {
-                                            'model': 'delay_minutes',
-                                            'label': '延迟执行时间（分钟）',
+                                            'for': 'delay_minutes'
+                                        },
+                                        'text': '延迟执行时间（分钟）'
+                                    },
+                                    {
+                                        'component': 'input',
+                                        'props': {
                                             'type': 'number',
-                                            'hint': '事件触发后延迟多少分钟执行同步'
+                                            'id': 'delay_minutes',
+                                            'name': 'delay_minutes',
+                                            'value': 5,
+                                            'class': 'form-control'
                                         }
                                     }
                                 ]
+                            }
+                        ]
+                    },
+                    # 增量同步周期配置
+                    {
+                        'component': 'div',
+                        'props': {
+                            'class': 'form-group'
+                        },
+                        'content': [
+                            {
+                                'component': 'label',
+                                'props': {
+                                    'for': 'incremental_cron'
+                                },
+                                'text': '增量同步周期'
+                            },
+                            {
+                                'component': 'input',
+                                'props': {
+                                    'type': 'text',
+                                    'id': 'incremental_cron',
+                                    'name': 'incremental_cron',
+                                    'value': '0 */6 * * *',
+                                    'placeholder': '0 */6 * * *',
+                                    'class': 'form-control'
+                                }
+                            },
+                            {
+                                'component': 'small',
+                                'props': {
+                                    'class': 'form-text text-muted'
+                                },
+                                'text': 'Cron表达式，默认每6小时执行一次增量同步'
                             }
                         ]
                     },
                     # 文件过滤
                     {
-                        'component': 'VRow',
+                        'component': 'div',
+                        'props': {
+                            'class': 'form-row'
+                        },
                         'content': [
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'component': 'div',
+                                'props': {
+                                    'class': 'form-group col-md-6'
+                                },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'label',
                                         'props': {
-                                            'model': 'file_filters',
-                                            'label': '文件类型过滤',
+                                            'for': 'file_filters'
+                                        },
+                                        'text': '文件类型过滤'
+                                    },
+                                    {
+                                        'component': 'input',
+                                        'props': {
+                                            'type': 'text',
+                                            'id': 'file_filters',
+                                            'name': 'file_filters',
                                             'placeholder': 'mp4,mkv,avi,mov',
-                                            'hint': '只同步指定类型的文件，用逗号分隔'
+                                            'class': 'form-control'
                                         }
+                                    },
+                                    {
+                                        'component': 'small',
+                                        'props': {
+                                            'class': 'form-text text-muted'
+                                        },
+                                        'text': '只同步指定类型的文件，用逗号分隔'
                                     }
                                 ]
                             },
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'component': 'div',
+                                'props': {
+                                    'class': 'form-group col-md-6'
+                                },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'label',
                                         'props': {
-                                            'model': 'exclude_patterns',
-                                            'label': '排除模式',
+                                            'for': 'exclude_patterns'
+                                        },
+                                        'text': '排除模式'
+                                    },
+                                    {
+                                        'component': 'input',
+                                        'props': {
+                                            'type': 'text',
+                                            'id': 'exclude_patterns',
+                                            'name': 'exclude_patterns',
                                             'placeholder': 'temp,cache,@eaDir',
-                                            'hint': '排除包含这些字符的文件/目录，用逗号分隔'
+                                            'class': 'form-control'
                                         }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    # 文件大小限制
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [
+                                    },
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'small',
                                         'props': {
-                                            'model': 'min_file_size',
-                                            'label': '最小文件大小 (MB)',
-                                            'type': 'number',
-                                            'hint': '小于此大小的文件不会被同步，0表示无限制'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'max_file_size',
-                                            'label': '最大文件大小 (MB)',
-                                            'type': 'number',
-                                            'hint': '大于此大小的文件不会被同步，0表示无限制'
-                                        }
+                                            'class': 'form-text text-muted'
+                                        },
+                                        'text': '排除包含这些字符的文件/目录，用逗号分隔'
                                     }
                                 ]
                             }
@@ -559,182 +691,72 @@ class TransferSync(_PluginBase):
                     },
                     # 高级设置
                     {
-                        'component': 'VRow',
+                        'component': 'div',
+                        'props': {
+                            'class': 'form-row'
+                        },
                         'content': [
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'component': 'div',
+                                'props': {
+                                    'class': 'form-group col-md-6'
+                                },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'label',
                                         'props': {
-                                            'model': 'max_depth',
-                                            'label': '最大目录深度',
+                                            'for': 'max_depth'
+                                        },
+                                        'text': '最大目录深度'
+                                    },
+                                    {
+                                        'component': 'input',
+                                        'props': {
                                             'type': 'number',
-                                            'hint': '限制同步的目录深度，-1表示无限制'
+                                            'id': 'max_depth',
+                                            'name': 'max_depth',
+                                            'value': -1,
+                                            'class': 'form-control'
                                         }
+                                    },
+                                    {
+                                        'component': 'small',
+                                        'props': {
+                                            'class': 'form-text text-muted'
+                                        },
+                                        'text': '限制同步的目录深度，-1表示无限制'
                                     }
                                 ]
                             },
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'component': 'div',
+                                'props': {
+                                    'class': 'form-group col-md-6'
+                                },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'label',
                                         'props': {
-                                            'model': 'max_workers',
-                                            'label': '并发线程数',
+                                            'for': 'max_workers'
+                                        },
+                                        'text': '并发线程数'
+                                    },
+                                    {
+                                        'component': 'input',
+                                        'props': {
                                             'type': 'number',
-                                            'hint': '同时进行同步的线程数量'
+                                            'id': 'max_workers',
+                                            'name': 'max_workers',
+                                            'value': 4,
+                                            'class': 'form-control'
                                         }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    # 定时任务
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [
+                                    },
                                     {
-                                        'component': 'VSwitch',
+                                        'component': 'small',
                                         'props': {
-                                            'model': 'enable_incremental',
-                                            'label': '启用增量同步',
-                                            'hint': '定时执行增量同步任务'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'incremental_cron',
-                                            'label': '增量同步周期',
-                                            'placeholder': '0 */6 * * *',
-                                            'hint': 'Cron表达式，如：0 */6 * * * (每6小时)'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_full_sync',
-                                            'label': '启用全量同步',
-                                            'hint': '定时执行全量同步任务'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'full_sync_cron',
-                                            'label': '全量同步周期',
-                                            'placeholder': '0 2 * * 0',
-                                            'hint': 'Cron表达式，如：0 2 * * 0 (每周日凌晨2点)'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    # 监控设置
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_progress',
-                                            'label': '启用进度显示',
-                                            'hint': '显示详细的同步进度信息'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'batch_size',
-                                            'label': '批处理大小',
-                                            'type': 'number',
-                                            'hint': '每批处理的文件数量'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    # 通知配置
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'notification_channels',
-                                            'label': '通知渠道',
-                                            'placeholder': 'telegram,wechat,email',
-                                            'hint': '指定通知渠道，用逗号分隔，留空则使用默认渠道'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    # 事件条件
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
-                                'content': [
-                                    {
-                                        'component': 'VTextarea',
-                                        'props': {
-                                            'model': 'event_conditions',
-                                            'label': '事件过滤条件',
-                                            'placeholder': 'media_type=movie\nfile_size>100\npath_contains=2024',
-                                            'hint': '设置事件过滤条件，每行一个条件，格式：字段名=值',
-                                            'rows': 3
-                                        }
+                                            'class': 'form-text text-muted'
+                                        },
+                                        'text': '同时进行同步的线程数量'
                                     }
                                 ]
                             }
@@ -747,38 +769,38 @@ class TransferSync(_PluginBase):
             "sync_paths": "",
             "delay_minutes": 5,
             "enable_immediate_execution": True,
-            "enable_incremental": False,
             "incremental_cron": "0 */6 * * *",
-            "enable_full_sync": False,
-            "full_sync_cron": "0 2 * * 0",
             "enable_notifications": False,
-            "notification_channels": "",
             "sync_strategy": "copy",
             "sync_mode": "immediate",
             "max_depth": -1,
             "file_filters": "",
             "exclude_patterns": "",
-            "max_file_size": 0,
-            "min_file_size": 0,
-            "enable_progress": True,
             "max_workers": 4,
-            "batch_size": 100,
-            "trigger_events": ["transfer.complete"],
-            "event_conditions": ""
+            "trigger_events": ["transfer.complete"]
         }
 
     # API 端点方法
     def sync_status(self) -> Dict[str, Any]:
-        """获取同步状态API"""
+        """获取同步状态API - 简化版本"""
         try:
-            return {
+            status = {
                 "enabled": self._enabled,
                 "sync_paths_count": len(self._sync_paths),
-                "event_statistics": self._event_manager.get_event_statistics(),
-                "pending_syncs": self._event_manager.get_pending_syncs(),
-                "performance_metrics": self._service_manager.get_performance_metrics(),
-                "health_status": self._service_manager.get_health_status()
+                "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
+                "incremental_cron": self._incremental_cron,
+                "immediate_execution": self._enable_immediate_execution
             }
+
+            # 如果使用高级功能，添加更多状态信息
+            if self._use_advanced_features and self._event_manager:
+                try:
+                    status["event_statistics"] = self._event_manager.get_event_statistics()
+                    status["pending_syncs"] = self._event_manager.get_pending_syncs()
+                except Exception:
+                    pass
+
+            return status
         except Exception as e:
             logger.error(f"获取同步状态失败: {str(e)}")
             return {"error": str(e)}
@@ -807,31 +829,6 @@ class TransferSync(_PluginBase):
             logger.error(f"手动触发同步失败: {str(e)}")
             return {"error": str(e)}
 
-    def full_sync(self) -> Dict[str, Any]:
-        """全量同步API"""
-        try:
-            if not self._enabled:
-                return {"error": "插件未启用"}
-
-            if not self._sync_paths:
-                return {"error": "未配置同步路径"}
-
-            # 执行全量同步
-            sync_count = 0
-            total_files = 0
-            for sync_config in self._sync_paths:
-                if self._sync_ops:
-                    result = self._sync_ops.execute_sync(sync_config, sync_config['source'])
-                    sync_count += 1
-                    total_files += result.get('synced_files', 0)
-
-            return {
-                "success": True,
-                "message": f"全量同步完成，处理了 {sync_count} 个路径，同步了 {total_files} 个文件"
-            }
-        except Exception as e:
-            logger.error(f"全量同步失败: {str(e)}")
-            return {"error": str(e)}
 
     def incremental_sync(self) -> Dict[str, Any]:
         """增量同步API"""
@@ -931,121 +928,6 @@ class TransferSync(_PluginBase):
             logger.error(f"测试路径失败: {str(e)}")
             return {"error": str(e)}
 
-    def clear_cache(self) -> Dict[str, Any]:
-        """清理缓存API"""
-        try:
-            # 清理服务管理器缓存
-            if self._use_advanced_features and self._service_manager:
-                self._service_manager.clear_cache()
-
-            # 清理方法级缓存
-            if hasattr(self, '_validate_config') and hasattr(self._validate_config, 'cache_clear'):
-                self._validate_config.cache_clear()
-
-            logger.info("缓存清理完成")
-            return {
-                "success": True,
-                "message": "缓存清理完成"
-            }
-        except Exception as e:
-            logger.error(f"清理缓存失败: {str(e)}")
-            return {"error": str(e)}
-
-    def health_check(self) -> Dict[str, Any]:
-        """健康检查API"""
-        try:
-            health_status = {
-                "overall": "healthy",
-                "components": {}
-            }
-
-            # 检查基础配置
-            health_status["components"]["config"] = {
-                "status": "healthy" if self._enabled and self._sync_paths else "warning",
-                "details": f"启用状态: {self._enabled}, 配置路径数: {len(self._sync_paths)}"
-            }
-
-            # 检查同步操作组件
-            health_status["components"]["sync_operations"] = {
-                "status": "healthy" if self._sync_ops else "error",
-                "details": "同步操作组件状态"
-            }
-
-            # 检查事件管理器
-            health_status["components"]["event_manager"] = {
-                "status": "healthy" if (self._use_advanced_features and self._event_manager) or not self._use_advanced_features else "warning",
-                "details": f"高级功能: {self._use_advanced_features}"
-            }
-
-            # 检查路径可访问性
-            path_issues = 0
-            for sync_config in self._sync_paths:
-                try:
-                    from pathlib import Path
-                    source_path = Path(sync_config.get('source', ''))
-                    if not source_path.exists():
-                        path_issues += 1
-                except Exception:
-                    path_issues += 1
-
-            health_status["components"]["paths"] = {
-                "status": "healthy" if path_issues == 0 else "warning",
-                "details": f"路径问题数量: {path_issues}"
-            }
-
-            # 总体状态评估
-            component_statuses = [comp["status"] for comp in health_status["components"].values()]
-            if "error" in component_statuses:
-                health_status["overall"] = "error"
-            elif "warning" in component_statuses:
-                health_status["overall"] = "warning"
-
-            return health_status
-        except Exception as e:
-            logger.error(f"健康检查失败: {str(e)}")
-            return {"error": str(e)}
-
-    def get_config(self) -> Dict[str, Any]:
-        """获取配置API"""
-        try:
-            return {
-                "enabled": self._enabled,
-                "sync_paths": [f"{config['source']}->{config['target']}" for config in self._sync_paths],
-                "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
-                "sync_mode": self._sync_mode.value if hasattr(self._sync_mode, 'value') else str(self._sync_mode),
-                "delay_minutes": self._delay_minutes,
-                "enable_immediate_execution": self._enable_immediate_execution,
-                "enable_notifications": self._enable_notifications,
-                "file_filters": self._file_filters,
-                "exclude_patterns": self._exclude_patterns,
-                "max_file_size": self._max_file_size,
-                "min_file_size": self._min_file_size,
-                "max_depth": self._max_depth,
-                "max_workers": self._max_workers,
-                "batch_size": self._batch_size,
-                "trigger_events": [event.value for event in self._trigger_events],
-                "enable_incremental": self._enable_incremental,
-                "incremental_cron": self._incremental_cron,
-                "enable_full_sync": self._enable_full_sync,
-                "full_sync_cron": self._full_sync_cron
-            }
-        except Exception as e:
-            logger.error(f"获取配置失败: {str(e)}")
-            return {"error": str(e)}
-
-    def save_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """保存配置API"""
-        try:
-            # 这里可以实现配置保存逻辑
-            # 通常会调用 MoviePilot 的配置保存接口
-            logger.info("配置保存请求已接收")
-            return {
-                "success": True,
-                "message": "配置保存成功"
-            }
-        except Exception as e:
-            logger.error(f"保存配置失败: {str(e)}")
-            return {"error": str(e)}
 
     def get_page(self) -> List[dict]:
         """获取插件页面"""
@@ -1093,7 +975,7 @@ class TransferSync(_PluginBase):
 
     # 兼容模式方法
     def _apply_config_compatible(self, config: Dict[str, Any]):
-        """兼容模式的配置应用"""
+        """兼容模式的配置应用 - 简化版本"""
         self._enabled = config.get("enabled", False)
 
         # 解析同步路径（兼容模式）
@@ -1111,12 +993,8 @@ class TransferSync(_PluginBase):
 
         self._delay_minutes = config.get("delay_minutes", 5)
         self._enable_immediate_execution = config.get("enable_immediate_execution", True)
-        self._enable_incremental = config.get("enable_incremental", False)
         self._incremental_cron = config.get("incremental_cron", "0 */6 * * *")
-        self._enable_full_sync = config.get("enable_full_sync", False)
-        self._full_sync_cron = config.get("full_sync_cron", "0 2 * * 0")
         self._enable_notifications = config.get("enable_notifications", False)
-        self._notification_channels = config.get("notification_channels", [])
 
         # 解析枚举值
         try:
@@ -1132,11 +1010,7 @@ class TransferSync(_PluginBase):
         self._max_depth = config.get("max_depth", -1)
         self._file_filters = self._parse_list_compatible(config.get("file_filters", ""))
         self._exclude_patterns = self._parse_list_compatible(config.get("exclude_patterns", ""))
-        self._max_file_size = config.get("max_file_size", 0)
-        self._min_file_size = config.get("min_file_size", 0)
-        self._enable_progress = config.get("enable_progress", True)
         self._max_workers = config.get("max_workers", 4)
-        self._batch_size = config.get("batch_size", 100)
 
         # 解析触发事件
         trigger_events_config = config.get("trigger_events", [])
@@ -1147,8 +1021,6 @@ class TransferSync(_PluginBase):
             self._trigger_events = [TriggerEvent(val) for val in event_values if self._is_valid_event_compatible(val)]
         else:
             self._trigger_events = [TriggerEvent.TRANSFER_COMPLETE]
-
-        self._event_conditions = config.get("event_conditions", {})
 
     def _parse_sync_paths_compatible(self, sync_paths_str: str) -> List[Dict[str, str]]:
         """兼容模式的同步路径解析"""
@@ -1248,6 +1120,26 @@ class TransferSync(_PluginBase):
             self._on_transfer_complete_compatible(event)
         except Exception as e:
             logger.error(f"兼容模式：处理下载添加事件失败: {str(e)}")
+
+    def get_service(self) -> List[Dict[str, Any]]:
+        """获取插件服务 - 启用默认增量同步"""
+        if not self._enabled or not self._sync_paths:
+            return []
+
+        services = []
+
+        # 默认启用增量同步定时任务
+        if self._incremental_cron:
+            services.append({
+                "id": "TransferSync_incremental_sync",
+                "name": "增量同步任务",
+                "trigger": "cron",
+                "cron": self._incremental_cron,
+                "func": self.incremental_sync,
+                "kwargs": {}
+            })
+
+        return services
 
     def stop_service(self):
         """停止服务"""
