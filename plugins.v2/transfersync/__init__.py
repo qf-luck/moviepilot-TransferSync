@@ -6,8 +6,15 @@ import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from clouddrive import CloudDriveClient, Client
-from clouddrive.proto import CloudDrive_pb2
+try:
+    from clouddrive import CloudDriveClient, Client
+    from clouddrive.proto import CloudDrive_pb2
+    CLOUDDRIVE_AVAILABLE = True
+except ImportError:
+    CloudDriveClient = None
+    Client = None
+    CloudDrive_pb2 = None
+    CLOUDDRIVE_AVAILABLE = False
 
 from app import schemas
 from app.core.config import settings
@@ -55,6 +62,13 @@ class Cd2Assistant(_PluginBase):
     _scheduler: Optional[BackgroundScheduler] = None
 
     def init_plugin(self, config: dict = None):
+        # 检查 clouddrive 依赖是否可用
+        if not CLOUDDRIVE_AVAILABLE:
+            logger.error("CloudDrive2助手启动失败：缺少 clouddrive 依赖库")
+            logger.error("请安装依赖：pip install clouddrive")
+            self.systemmessage.put("CloudDrive2助手启动失败：缺少 clouddrive 依赖库，请安装：pip install clouddrive")
+            return
+
         self._cd2_clients = {}
         self._clients = {}
         self._cd2_url = {}
