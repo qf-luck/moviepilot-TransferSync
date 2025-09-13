@@ -64,6 +64,11 @@ class ApiHandler:
                 "path": "/restore",
                 "endpoint": self.restore_config,
                 "methods": ["POST"]
+            },
+            {
+                "path": "/execute",
+                "endpoint": self.execute_immediate_sync,
+                "methods": ["POST"]
             }
         ]
     
@@ -191,4 +196,13 @@ class ApiHandler:
                 return {"success": False, "message": "恢复功能不可用"}
         except Exception as e:
             logger.error(f"恢复配置失败: {str(e)}")
+            return {"success": False, "message": str(e)}
+
+    def execute_immediate_sync(self, sync_path: str = None) -> Dict[str, Any]:
+        """立即执行同步"""
+        try:
+            result = self.plugin.execute_immediate_sync(sync_path)
+            return result
+        except Exception as e:
+            logger.error(f"立即执行同步失败: {str(e)}")
             return {"success": False, "message": str(e)}

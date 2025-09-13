@@ -63,6 +63,8 @@ class TransferSync(_PluginBase):
     _enabled = False
     _sync_root_path = ""  # 简化为单一根路径
     _sync_target_path = ""  # 同步目标路径
+    _delay_minutes = 5  # 延迟执行时间（分钟）
+    _enable_immediate_execution = True  # 启用立即执行功能
     _enable_incremental = False
     _incremental_cron = "0 */6 * * *"
     _enable_full_sync = False
@@ -84,6 +86,8 @@ class TransferSync(_PluginBase):
     _event_conditions = {}  # 事件过滤条件
     _event_statistics = {}  # 事件统计信息
     _last_sync_time = None
+    _last_event_time = {}  # 记录每个路径的最后事件时间
+    _pending_syncs = {}  # 待执行的同步任务
     _validator = None
     _sync_ops = None
     _lock = threading.Lock()
@@ -101,6 +105,8 @@ class TransferSync(_PluginBase):
             # 基础配置
             self._sync_root_path = config.get("sync_root_path", "")
             self._sync_target_path = config.get("sync_target_path", "")
+            self._delay_minutes = config.get("delay_minutes", 5)
+            self._enable_immediate_execution = config.get("enable_immediate_execution", True)
             self._enable_incremental = config.get("enable_incremental", False)
             self._incremental_cron = config.get("incremental_cron", "0 */6 * * *")
             self._enable_full_sync = config.get("enable_full_sync", False)
@@ -307,6 +313,8 @@ class TransferSync(_PluginBase):
             "enabled": self._enabled,
             "sync_root_path": self._sync_root_path,
             "sync_target_path": self._sync_target_path,
+            "delay_minutes": self._delay_minutes,
+            "enable_immediate_execution": self._enable_immediate_execution,
             "enable_incremental": self._enable_incremental,
             "incremental_cron": self._incremental_cron,
             "enable_full_sync": self._enable_full_sync,
@@ -429,10 +437,21 @@ class TransferSync(_PluginBase):
             sync_path = self._extract_sync_path(event.event_data, event_type)
             
             if sync_path:
-                logger.info(f"处理{self._get_event_display_name(event_type.value)}事件，同步路径: {sync_path}")
-                result = self._sync_ops.sync_directory(sync_path)
-                success = result.get('success', False)
-                error_type = result.get('error_type') if not success else None
+                # 记录事件时间
+                self._last_event_time[sync_path] = start_time
+                
+                if self._enable_immediate_execution:
+                    # 立即执行
+                    logger.info(f"立即处理{self._get_event_display_name(event_type.value)}事件，同步路径: {sync_path}")
+                    result = self._sync_ops.sync_directory(sync_path)
+                    success = result.get('success', False)
+                    error_type = result.get('error_type') if not success else None
+                else:
+                    # 延迟执行
+                    logger.info(f"延迟{self._delay_minutes}分钟处理{self._get_event_display_name(event_type.value)}事件，同步路径: {sync_path}")
+                    self._schedule_delayed_sync(sync_path, event_type)
+                    success = True
+                    error_type = None
             else:
                 logger.warning(f"{self._get_event_display_name(event_type.value)}事件无有效同步路径")
                 success = False
@@ -445,6 +464,67 @@ class TransferSync(_PluginBase):
             logger.error(f"处理{self._get_event_display_name(event_type.value)}事件失败: {str(e)}")
             processing_time = (datetime.now() - start_time).total_seconds()
             self._update_event_stats(event_type, False, processing_time, "exception")
+
+    def _schedule_delayed_sync(self, sync_path: str, event_type: TriggerEvent):
+        """安排延迟同步"""
+        from threading import Timer
+        
+        task_id = f"{sync_path}_{int(time.time())}"
+        
+        def delayed_sync():
+            try:
+                # 检查是否在延迟期间有新的事件
+                last_event = self._last_event_time.get(sync_path)
+                if last_event and (datetime.now() - last_event).total_seconds() >= self._delay_minutes * 60:
+                    logger.info(f"执行延迟同步任务: {sync_path}")
+                    result = self._sync_ops.sync_directory(sync_path)
+                    if result.get('success'):
+                        logger.info(f"延迟同步完成: {sync_path}")
+                    else:
+                        logger.error(f"延迟同步失败: {sync_path}, {result.get('message')}")
+                else:
+                    logger.info(f"延迟期间有新事件，跳过同步: {sync_path}")
+                
+                # 清理任务记录
+                with self._lock:
+                    self._pending_syncs.pop(task_id, None)
+                    
+            except Exception as e:
+                logger.error(f"延迟同步任务执行失败: {str(e)}")
+        
+        # 创建定时器
+        timer = Timer(self._delay_minutes * 60, delayed_sync)
+        timer.start()
+        
+        # 记录待执行任务
+        with self._lock:
+            self._pending_syncs[task_id] = {
+                'path': sync_path,
+                'event_type': event_type.value,
+                'scheduled_time': datetime.now(),
+                'timer': timer
+            }
+
+    def execute_immediate_sync(self, sync_path: str = None) -> dict:
+        """立即执行同步"""
+        try:
+            if sync_path:
+                # 同步指定路径
+                result = self._sync_ops.sync_directory(sync_path)
+            else:
+                # 同步根路径
+                if not self._sync_root_path:
+                    return {"success": False, "message": "未配置同步根路径"}
+                result = self._sync_ops.sync_directory(self._sync_root_path)
+            
+            if result.get('success'):
+                self._last_sync_time = datetime.now()
+                
+            return result
+            
+        except Exception as e:
+            logger.error(f"立即同步失败: {str(e)}")
+            return {"success": False, "message": f"立即同步失败: {str(e)}"}
 
     def _extract_sync_path(self, event_data: Dict, event_type: TriggerEvent) -> Optional[str]:
         """从事件数据中提取同步路径"""
@@ -646,14 +726,33 @@ class TransferSync(_PluginBase):
         """获取通知渠道选项（带缓存）"""
         notification_options = []
         try:
-            available_channels = self.notification_manager.get_available_channels()
+            # 直接使用通知助手获取配置
+            notification_configs = self._notification_helper.get_configs()
             notification_options = [
-                {"title": info.get("name", name), "value": name}
-                for name, info in available_channels.items()
-                if info.get("enabled", False)
+                {"title": f"{config.name} ({config.type})", "value": config.name}
+                for config in notification_configs.values()
+                if config and config.enabled
             ]
+            
+            # 如果没有获取到配置，尝试从系统获取
+            if not notification_options:
+                from app.helper.service import ServiceConfigHelper
+                configs = ServiceConfigHelper.get_notification_configs()
+                notification_options = [
+                    {"title": f"{config.name} ({config.type})", "value": config.name}
+                    for config in configs
+                    if config and config.enabled
+                ]
+                
         except Exception as e:
             logger.error(f"获取通知渠道失败: {str(e)}")
+            # 提供默认选项
+            notification_options = [
+                {"title": "WeChat", "value": "wechat"},
+                {"title": "Telegram", "value": "telegram"},
+                {"title": "Email", "value": "email"},
+                {"title": "Slack", "value": "slack"}
+            ]
         return notification_options
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
@@ -718,16 +817,18 @@ class TransferSync(_PluginBase):
                                                 },
                                                 'content': [
                                                     {
-                                                        'component': 'VTextField',
+                                                        'component': 'VFileInput',
                                                         'props': {
                                                             'model': 'sync_root_path',
                                                             'label': '📥 同步根路径',
-                                                            'placeholder': '/media/downloads',
+                                                            'placeholder': '选择或输入同步根路径',
                                                             'hint': '整理完成后的文件所在根目录（监听路径）',
                                                             'persistent-hint': True,
                                                             'prepend-inner-icon': 'mdi-folder-open',
                                                             'variant': 'outlined',
-                                                            'clearable': True
+                                                            'clearable': True,
+                                                            'directory': True,
+                                                            'accept': 'directory/*'
                                                         }
                                                     }
                                                 ]
@@ -740,16 +841,18 @@ class TransferSync(_PluginBase):
                                                 },
                                                 'content': [
                                                     {
-                                                        'component': 'VTextField',
+                                                        'component': 'VFileInput',
                                                         'props': {
                                                             'model': 'sync_target_path',
                                                             'label': '📤 同步目标路径',
-                                                            'placeholder': '/media/backup',
+                                                            'placeholder': '选择或输入同步目标路径',
                                                             'hint': '文件同步到的目标目录（备份路径）',
                                                             'persistent-hint': True,
                                                             'prepend-inner-icon': 'mdi-folder-sync',
                                                             'variant': 'outlined',
-                                                            'clearable': True
+                                                            'clearable': True,
+                                                            'directory': True,
+                                                            'accept': 'directory/*'
                                                         }
                                                     }
                                                 ]
@@ -764,6 +867,80 @@ class TransferSync(_PluginBase):
                                             'class': 'mt-2'
                                         },
                                         'text': '💡 提示：插件会监听根路径下的整理完成事件，自动将整理后的文件同步到目标路径'
+                                    },
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VSwitch',
+                                                        'props': {
+                                                            'model': 'enable_immediate_execution',
+                                                            'label': '⚡ 启用立即执行',
+                                                            'hint': '开启后整理完成立即同步，关闭则延迟执行',
+                                                            'persistent-hint': True,
+                                                            'color': 'primary'
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VSlider',
+                                                        'props': {
+                                                            'model': 'delay_minutes',
+                                                            'label': '⏱️ 延迟执行时间（分钟）',
+                                                            'hint': '整理完成后延迟多长时间执行同步',
+                                                            'persistent-hint': True,
+                                                            'min': 1,
+                                                            'max': 60,
+                                                            'step': 1,
+                                                            'thumb-label': True,
+                                                            'disabled': 'enable_immediate_execution'
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VBtn',
+                                                        'props': {
+                                                            'variant': 'outlined',
+                                                            'color': 'primary',
+                                                            'prepend-icon': 'mdi-play',
+                                                            'block': True,
+                                                            'class': 'mb-2'
+                                                        },
+                                                        'text': '🚀 立即执行同步',
+                                                        'events': {
+                                                            'click': 'execute_immediate_sync'
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     }
                                 ]
                             }
@@ -893,7 +1070,7 @@ class TransferSync(_PluginBase):
                                                 },
                                                 'content': [
                                                     {
-                                                        'component': 'VTextField',
+                                                        'component': 'VCronInput',
                                                         'props': {
                                                             'model': 'incremental_cron',
                                                             'label': '🕐 增量同步周期',
@@ -938,7 +1115,7 @@ class TransferSync(_PluginBase):
                                                 },
                                                 'content': [
                                                     {
-                                                        'component': 'VTextField',
+                                                        'component': 'VCronInput',
                                                         'props': {
                                                             'model': 'full_sync_cron',
                                                             'label': '🕕 全量同步周期',
@@ -1041,6 +1218,8 @@ class TransferSync(_PluginBase):
             "enabled": False,
             "sync_root_path": "",
             "sync_target_path": "",
+            "delay_minutes": 5,
+            "enable_immediate_execution": True,
             "sync_strategy": "copy",
             "sync_mode": "immediate",
             "enable_incremental": False,

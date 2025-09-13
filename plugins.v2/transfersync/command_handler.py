@@ -133,7 +133,11 @@ class CommandHandler:
             if not self.plugin._sync_root_path or not self.plugin._sync_target_path:
                 return {"success": False, "message": "未配置同步路径"}
             
-            if sync_type == "full":
+            if sync_type == "immediate":
+                # 立即执行同步
+                result = self.plugin.execute_immediate_sync()
+                return result
+            elif sync_type == "full":
                 if hasattr(self.plugin, 'sync_scheduler'):
                     self.plugin.sync_scheduler._full_sync_job()
                 else:
@@ -397,6 +401,8 @@ class CommandHandler:
                 self._send_status_info(channel, source, userid, original_message_id, original_chat_id)
             elif text == "sync_menu":
                 self._send_sync_menu(channel, source, userid, original_message_id, original_chat_id)
+            elif text == "sync_immediate":
+                self._handle_sync_action("immediate", channel, source, userid, original_message_id, original_chat_id)
             elif text == "sync_incremental":
                 self._handle_sync_action("incremental", channel, source, userid, original_message_id, original_chat_id)
             elif text == "sync_full":
@@ -464,10 +470,11 @@ class CommandHandler:
         try:
             buttons = [
                 [
-                    {"text": "🔄 增量同步", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|sync_incremental"},
-                    {"text": "🔄 全量同步", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|sync_full"}
+                    {"text": "🚀 立即同步", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|sync_immediate"},
+                    {"text": "📈 增量同步", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|sync_incremental"}
                 ],
                 [
+                    {"text": "🔄 全量同步", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|sync_full"},
                     {"text": "🔙 返回主菜单", "callback_data": f"[PLUGIN]{self.plugin.__class__.__name__}|main_menu"}
                 ]
             ]
