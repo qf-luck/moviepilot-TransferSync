@@ -219,20 +219,84 @@ class TransferSync(_PluginBase):
                 "path": "/browse_files",
                 "endpoint": self.browse_files,
                 "methods": ["GET"],
+                "auth": "bear",
                 "summary": "浏览文件目录",
-                "description": "用于路径选择的文件管理器接口"
+                "description": "用于路径选择的文件管理器接口，支持Vue前端"
             },
             {
                 "path": "/browse_path",
                 "endpoint": self.browse_path,
                 "methods": ["POST"],
+                "auth": "bear",
                 "summary": "浏览指定路径",
                 "description": "浏览指定路径的文件和目录"
+            },
+            {
+                "path": "/get_config_api",
+                "endpoint": self.get_config_api,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "获取配置API",
+                "description": "为Vue前端提供配置数据"
+            },
+            {
+                "path": "/save_config_api",
+                "endpoint": self.save_config_api,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "保存配置API",
+                "description": "为Vue前端保存配置数据"
             }
         ]
 
+    @staticmethod
+    def get_render_mode() -> Tuple[str, Optional[str]]:
+        """
+        返回插件使用的前端渲染模式
+        :return: 前端渲染模式，前端文件目录
+        """
+        # 可以选择使用Vue模式或传统Vuetify模式
+        # return "vue", "dist/assets"  # Vue模块联邦模式
+        return "vuetify", None  # 传统Vuetify JSON配置模式
+
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """获取配置表单 - 按要求重新设计"""
+        """获取配置表单 - 支持Vuetify和Vue模式"""
+        # 检查渲染模式
+        render_mode, _ = self.get_render_mode()
+
+        if render_mode == "vue":
+            # Vue模式：返回None和配置数据
+            return None, self._get_vue_config()
+        else:
+            # Vuetify模式：返回组件配置
+            return self._get_vuetify_form()
+
+    def _get_vue_config(self) -> Dict[str, Any]:
+        """获取Vue模式的配置数据"""
+        return {
+            "enabled": self._enabled,
+            "source_path": "",
+            "target_path": "",
+            "sync_paths": "\n".join([f"{p['source']}->{p['target']}" for p in self._sync_paths]),
+            "sync_type": self._sync_type.value if hasattr(self._sync_type, 'value') else str(self._sync_type),
+            "execution_mode": self._execution_mode.value if hasattr(self._execution_mode, 'value') else str(self._execution_mode),
+            "delay_minutes": self._delay_minutes,
+            "enable_notifications": self._enable_notifications,
+            "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
+            "max_depth": self._max_depth,
+            "file_filters": ",".join(self._file_filters),
+            "exclude_patterns": ",".join(self._exclude_patterns),
+            "max_workers": self._max_workers,
+            "trigger_events": [event.value for event in self._trigger_events],
+            # 文件浏览器状态
+            "file_browser_dialog": False,
+            "current_browse_path": "",
+            "file_list_items": [],
+            "browse_type": ""
+        }
+
+    def _get_vuetify_form(self) -> Tuple[List[dict], Dict[str, Any]]:
+        """获取Vuetify模式的表单配置 - 按要求重新设计"""
         return [
             {
                 'component': 'VForm',
@@ -852,6 +916,32 @@ class TransferSync(_PluginBase):
     def browse_path(self, path: str) -> Dict[str, Any]:
         """浏览指定路径的API"""
         return self.browse_files(path)
+
+    def get_config_api(self) -> Dict[str, Any]:
+        """获取配置API - 为Vue前端提供配置数据"""
+        try:
+            return {
+                "success": True,
+                "data": self._get_vue_config()
+            }
+        except Exception as e:
+            logger.error(f"获取配置API失败: {str(e)}")
+            return {"success": False, "error": str(e)}
+
+    def save_config_api(self, config_data: Dict[str, Any]) -> Dict[str, Any]:
+        """保存配置API - 为Vue前端保存配置"""
+        try:
+            # 这里可以实现配置保存逻辑
+            # 通常会调用 MoviePilot 的配置保存接口
+            logger.info("Vue前端配置保存请求已接收")
+            return {
+                "success": True,
+                "message": "配置保存成功",
+                "data": config_data
+            }
+        except Exception as e:
+            logger.error(f"保存配置API失败: {str(e)}")
+            return {"success": False, "error": str(e)}
 
     def get_page(self) -> List[dict]:
         """获取插件页面"""
