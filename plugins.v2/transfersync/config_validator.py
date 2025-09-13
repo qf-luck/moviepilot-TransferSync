@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 from apscheduler.triggers.cron import CronTrigger
 
-from .types import TriggerEvent
+from .sync_types import TriggerEvent
 
 
 class ConfigValidator:

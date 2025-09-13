@@ -11,7 +11,7 @@ from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 from app.log import logger
-from .types import SyncStrategy, SyncMode, SyncStatus
+from .sync_types import SyncStrategy, SyncMode, SyncStatus
 from .exceptions import SyncException, SyncPermissionError, SyncSpaceError
 from .file_operations import AtomicFileOperation
 

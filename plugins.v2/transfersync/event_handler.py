@@ -4,7 +4,7 @@
 import time
 from app.core.event import Event
 from app.log import logger
-from .types import TriggerEvent
+from .sync_types import TriggerEvent
 
 
 def event_handler(event_type: TriggerEvent):
