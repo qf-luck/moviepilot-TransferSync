@@ -67,14 +67,12 @@ class TransferSync(_PluginBase):
         self._enabled = False
         self._lock = threading.Lock()
 
-        # 配置属性 - 简化版本，移除不必要的选项
+        # 配置属性 - 优化版本
         self._sync_paths = []  # 多路径支持
         self._delay_minutes = 5
-        self._enable_immediate_execution = True
-        self._incremental_cron = "0 */6 * * *"  # 默认启用增量同步
         self._enable_notifications = False
         self._sync_strategy = SyncStrategy.COPY
-        self._sync_mode = SyncMode.IMMEDIATE
+        self._sync_mode = SyncMode.IMMEDIATE  # 立即/延迟执行
         self._max_depth = -1
         self._file_filters = []
         self._exclude_patterns = []
@@ -116,12 +114,10 @@ class TransferSync(_PluginBase):
             logger.error(f"TransferSync插件初始化失败: {str(e)}")
 
     def _apply_config(self, config: Dict[str, Any]):
-        """应用解析后的配置 - 简化版本"""
+        """应用解析后的配置 - 优化版本"""
         self._enabled = config.get("enabled", False)
         self._sync_paths = config.get("sync_paths", [])
         self._delay_minutes = config.get("delay_minutes", 5)
-        self._enable_immediate_execution = config.get("enable_immediate_execution", True)
-        self._incremental_cron = config.get("incremental_cron", "0 */6 * * *")
         self._enable_notifications = config.get("enable_notifications", False)
         self._sync_strategy = config.get("sync_strategy", SyncStrategy.COPY)
         self._sync_mode = config.get("sync_mode", SyncMode.IMMEDIATE)
@@ -187,7 +183,7 @@ class TransferSync(_PluginBase):
         ]
 
     def get_api(self) -> List[Dict[str, Any]]:
-        """获取插件API - 简化版本"""
+        """获取插件API - 包含文件管理器支持"""
         return [
             {
                 "path": "/sync_status",
@@ -216,219 +212,235 @@ class TransferSync(_PluginBase):
                 "methods": ["GET"],
                 "summary": "测试路径",
                 "description": "测试同步路径的可访问性和权限"
+            },
+            {
+                "path": "/browse_files",
+                "endpoint": self.browse_files,
+                "methods": ["GET"],
+                "summary": "浏览文件目录",
+                "description": "用于路径选择的文件管理器接口"
             }
         ]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """获取配置表单 - 简化版本，移除不必要的选项"""
+        """获取配置表单 - 使用Vuetify组件，参考p115strmhelper设计"""
         return [
             {
-                'component': 'div',
-                'props': {
-                    'class': 'form-container'
-                },
+                'component': 'VForm',
                 'content': [
-                    # 插件说明
                     {
-                        'component': 'div',
-                        'props': {
-                            'class': 'alert alert-info'
-                        },
-                        'text': '整理后同步插件 - 监听事件自动同步文件到指定位置，默认启用增量同步'
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'type': 'info',
+                                            'variant': 'tonal',
+                                            'text': '整理后同步插件 - 监听事件自动同步文件，支持增量和全量同步模式'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
                     },
                     # 基础开关
                     {
-                        'component': 'div',
-                        'props': {
-                            'class': 'form-row'
-                        },
+                        'component': 'VRow',
                         'content': [
                             {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'form-group'
-                                },
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 6},
                                 'content': [
                                     {
-                                        'component': 'input',
+                                        'component': 'VSwitch',
                                         'props': {
-                                            'type': 'checkbox',
-                                            'id': 'enabled',
-                                            'name': 'enabled',
-                                            'value': True
+                                            'model': 'enabled',
+                                            'label': '启用插件',
+                                            'hint': '开启后将监听事件并自动同步'
                                         }
-                                    },
-                                    {
-                                        'component': 'label',
-                                        'props': {
-                                            'for': 'enabled'
-                                        },
-                                        'text': '启用插件'
                                     }
                                 ]
                             },
                             {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'form-group'
-                                },
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 6},
                                 'content': [
                                     {
-                                        'component': 'input',
+                                        'component': 'VSwitch',
                                         'props': {
-                                            'type': 'checkbox',
-                                            'id': 'enable_notifications',
-                                            'name': 'enable_notifications',
-                                            'value': False
+                                            'model': 'enable_notifications',
+                                            'label': '启用通知',
+                                            'hint': '开启后将发送同步状态通知'
                                         }
-                                    },
-                                    {
-                                        'component': 'label',
-                                        'props': {
-                                            'for': 'enable_notifications'
-                                        },
-                                        'text': '启用通知'
                                     }
                                 ]
                             }
                         ]
                     },
-                    # 同步路径配置
+                    # 同步路径配置 - 参考p115strmhelper设计
                     {
-                        'component': 'div',
-                        'props': {
-                            'class': 'form-group'
-                        },
+                        'component': 'VRow',
                         'content': [
                             {
-                                'component': 'label',
-                                'props': {
-                                    'for': 'sync_paths'
-                                },
-                                'text': '同步路径配置'
-                            },
-                            {
-                                'component': 'textarea',
-                                'props': {
-                                    'id': 'sync_paths',
-                                    'name': 'sync_paths',
-                                    'rows': 4,
-                                    'placeholder': '源路径1->目标路径1\n源路径2->目标路径2\n或用逗号分隔多组配置',
-                                    'class': 'form-control'
-                                }
-                            },
-                            {
-                                'component': 'small',
-                                'props': {
-                                    'class': 'form-text text-muted'
-                                },
-                                'text': '支持多组同步路径配置，格式：源路径->目标路径 或 源路径::目标路径'
-                            }
-                        ]
-                    },
-                    # 基础配置
-                    {
-                        'component': 'div',
-                        'props': {
-                            'class': 'form-row'
-                        },
-                        'content': [
-                            {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'form-group col-md-6'
-                                },
+                                'component': 'VCol',
+                                'props': {'cols': 12},
                                 'content': [
                                     {
-                                        'component': 'label',
-                                        'props': {
-                                            'for': 'sync_strategy'
-                                        },
-                                        'text': '同步策略'
-                                    },
-                                    {
-                                        'component': 'select',
-                                        'props': {
-                                            'id': 'sync_strategy',
-                                            'name': 'sync_strategy',
-                                            'class': 'form-control'
-                                        },
+                                        'component': 'VCard',
+                                        'props': {'variant': 'tonal'},
                                         'content': [
                                             {
-                                                'component': 'option',
-                                                'props': {
-                                                    'value': 'copy'
-                                                },
-                                                'text': '复制文件'
+                                                'component': 'VCardTitle',
+                                                'props': {'class': 'text-subtitle-1'},
+                                                'text': '同步路径配置'
                                             },
                                             {
-                                                'component': 'option',
-                                                'props': {
-                                                    'value': 'move'
-                                                },
-                                                'text': '移动文件'
-                                            },
-                                            {
-                                                'component': 'option',
-                                                'props': {
-                                                    'value': 'softlink'
-                                                },
-                                                'text': '软链接'
-                                            },
-                                            {
-                                                'component': 'option',
-                                                'props': {
-                                                    'value': 'hardlink'
-                                                },
-                                                'text': '硬链接'
+                                                'component': 'VCardText',
+                                                'content': [
+                                                    {
+                                                        'component': 'VRow',
+                                                        'content': [
+                                                            {
+                                                                'component': 'VCol',
+                                                                'props': {'cols': 12, 'md': 5},
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'VTextField',
+                                                                        'props': {
+                                                                            'model': 'source_path',
+                                                                            'label': '源路径',
+                                                                            'placeholder': '请选择或输入源路径',
+                                                                            'clearable': True
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                'component': 'VCol',
+                                                                'props': {'cols': 12, 'md': 1},
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'VBtn',
+                                                                        'props': {
+                                                                            'icon': 'mdi-folder-search',
+                                                                            'variant': 'outlined',
+                                                                            'color': 'primary',
+                                                                            'size': 'small',
+                                                                            'onclick': 'browseSourcePath'
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                'component': 'VCol',
+                                                                'props': {'cols': 12, 'md': 5},
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'VTextField',
+                                                                        'props': {
+                                                                            'model': 'target_path',
+                                                                            'label': '目标路径',
+                                                                            'placeholder': '请选择或输入目标路径',
+                                                                            'clearable': True
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                'component': 'VCol',
+                                                                'props': {'cols': 12, 'md': 1},
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'VBtn',
+                                                                        'props': {
+                                                                            'icon': 'mdi-folder-search',
+                                                                            'variant': 'outlined',
+                                                                            'color': 'primary',
+                                                                            'size': 'small',
+                                                                            'onclick': 'browseTargetPath'
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        'component': 'VTextarea',
+                                                        'props': {
+                                                            'model': 'sync_paths',
+                                                            'label': '同步路径列表',
+                                                            'placeholder': '源路径1->目标路径1\n源路径2->目标路径2',
+                                                            'hint': '每行一组路径配置，格式：源路径->目标路径',
+                                                            'rows': 3
+                                                        }
+                                                    }
+                                                ]
                                             }
                                         ]
                                     }
                                 ]
-                            },
+                            }
+                        ]
+                    },
+                    # 同步配置
+                    {
+                        'component': 'VRow',
+                        'content': [
                             {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'form-group col-md-6'
-                                },
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
                                 'content': [
                                     {
-                                        'component': 'label',
+                                        'component': 'VSelect',
                                         'props': {
-                                            'for': 'sync_mode'
-                                        },
-                                        'text': '同步模式'
-                                    },
+                                            'model': 'sync_strategy',
+                                            'label': '同步策略',
+                                            'items': [
+                                                {'title': '复制文件', 'value': 'copy'},
+                                                {'title': '移动文件', 'value': 'move'},
+                                                {'title': '软链接', 'value': 'softlink'},
+                                                {'title': '硬链接', 'value': 'hardlink'}
+                                            ],
+                                            'hint': '选择文件同步的方式'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [
                                     {
-                                        'component': 'select',
+                                        'component': 'VSelect',
                                         'props': {
-                                            'id': 'sync_mode',
-                                            'name': 'sync_mode',
-                                            'class': 'form-control'
-                                        },
-                                        'content': [
-                                            {
-                                                'component': 'option',
-                                                'props': {
-                                                    'value': 'immediate'
-                                                },
-                                                'text': '立即同步'
-                                            },
-                                            {
-                                                'component': 'option',
-                                                'props': {
-                                                    'value': 'batch'
-                                                },
-                                                'text': '批量同步'
-                                            },
-                                            {
-                                                'component': 'option',
-                                                'props': {
-                                                    'value': 'queue'
-                                                },
-                                                'text': '队列同步'
-                                            }
-                                        ]
+                                            'model': 'sync_mode',
+                                            'label': '执行模式',
+                                            'items': [
+                                                {'title': '立即执行', 'value': 'immediate'},
+                                                {'title': '延迟执行', 'value': 'delayed'}
+                                            ],
+                                            'hint': '选择同步执行的时机'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 4},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'delay_minutes',
+                                            'label': '延迟时间（分钟）',
+                                            'type': 'number',
+                                            'hint': '延迟执行模式下的等待时间',
+                                            'show': '{{ sync_mode === "delayed" }}'
+                                        }
                                     }
                                 ]
                             }
@@ -436,254 +448,66 @@ class TransferSync(_PluginBase):
                     },
                     # 触发事件配置
                     {
-                        'component': 'div',
-                        'props': {
-                            'class': 'form-group'
-                        },
+                        'component': 'VRow',
                         'content': [
                             {
-                                'component': 'label',
-                                'props': {
-                                    'for': 'trigger_events'
-                                },
-                                'text': '触发事件'
-                            },
-                            {
-                                'component': 'select',
-                                'props': {
-                                    'id': 'trigger_events',
-                                    'name': 'trigger_events',
-                                    'multiple': True,
-                                    'class': 'form-control'
-                                },
+                                'component': 'VCol',
+                                'props': {'cols': 12},
                                 'content': [
                                     {
-                                        'component': 'option',
+                                        'component': 'VSelect',
                                         'props': {
-                                            'value': 'transfer.complete'
-                                        },
-                                        'text': '整理完成'
-                                    },
-                                    {
-                                        'component': 'option',
-                                        'props': {
-                                            'value': 'download.added'
-                                        },
-                                        'text': '下载添加'
-                                    },
-                                    {
-                                        'component': 'option',
-                                        'props': {
-                                            'value': 'subscribe.complete'
-                                        },
-                                        'text': '订阅完成'
-                                    },
-                                    {
-                                        'component': 'option',
-                                        'props': {
-                                            'value': 'media.added'
-                                        },
-                                        'text': '媒体添加'
-                                    },
-                                    {
-                                        'component': 'option',
-                                        'props': {
-                                            'value': 'file.moved'
-                                        },
-                                        'text': '文件移动'
-                                    },
-                                    {
-                                        'component': 'option',
-                                        'props': {
-                                            'value': 'directory.scan.complete'
-                                        },
-                                        'text': '目录扫描完成'
-                                    },
-                                    {
-                                        'component': 'option',
-                                        'props': {
-                                            'value': 'scrape.complete'
-                                        },
-                                        'text': '刮削完成'
-                                    },
-                                    {
-                                        'component': 'option',
-                                        'props': {
-                                            'value': 'plugin.triggered'
-                                        },
-                                        'text': '插件触发'
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'small',
-                                'props': {
-                                    'class': 'form-text text-muted'
-                                },
-                                'text': '按住Ctrl键可选择多个事件类型'
-                            }
-                        ]
-                    },
-                    # 执行设置
-                    {
-                        'component': 'div',
-                        'props': {
-                            'class': 'form-row'
-                        },
-                        'content': [
-                            {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'form-group col-md-6'
-                                },
-                                'content': [
-                                    {
-                                        'component': 'input',
-                                        'props': {
-                                            'type': 'checkbox',
-                                            'id': 'enable_immediate_execution',
-                                            'name': 'enable_immediate_execution',
-                                            'value': True
-                                        }
-                                    },
-                                    {
-                                        'component': 'label',
-                                        'props': {
-                                            'for': 'enable_immediate_execution'
-                                        },
-                                        'text': '启用立即执行'
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'form-group col-md-6'
-                                },
-                                'content': [
-                                    {
-                                        'component': 'label',
-                                        'props': {
-                                            'for': 'delay_minutes'
-                                        },
-                                        'text': '延迟执行时间（分钟）'
-                                    },
-                                    {
-                                        'component': 'input',
-                                        'props': {
-                                            'type': 'number',
-                                            'id': 'delay_minutes',
-                                            'name': 'delay_minutes',
-                                            'value': 5,
-                                            'class': 'form-control'
+                                            'model': 'trigger_events',
+                                            'label': '触发事件',
+                                            'items': [
+                                                {'title': '整理完成', 'value': 'transfer.complete'},
+                                                {'title': '下载添加', 'value': 'download.added'},
+                                                {'title': '订阅完成', 'value': 'subscribe.complete'},
+                                                {'title': '媒体添加', 'value': 'media.added'},
+                                                {'title': '文件移动', 'value': 'file.moved'},
+                                                {'title': '目录扫描完成', 'value': 'directory.scan.complete'},
+                                                {'title': '刮削完成', 'value': 'scrape.complete'},
+                                                {'title': '插件触发', 'value': 'plugin.triggered'}
+                                            ],
+                                            'multiple': True,
+                                            'hint': '选择触发同步的事件类型'
                                         }
                                     }
                                 ]
-                            }
-                        ]
-                    },
-                    # 增量同步周期配置
-                    {
-                        'component': 'div',
-                        'props': {
-                            'class': 'form-group'
-                        },
-                        'content': [
-                            {
-                                'component': 'label',
-                                'props': {
-                                    'for': 'incremental_cron'
-                                },
-                                'text': '增量同步周期'
-                            },
-                            {
-                                'component': 'input',
-                                'props': {
-                                    'type': 'text',
-                                    'id': 'incremental_cron',
-                                    'name': 'incremental_cron',
-                                    'value': '0 */6 * * *',
-                                    'placeholder': '0 */6 * * *',
-                                    'class': 'form-control'
-                                }
-                            },
-                            {
-                                'component': 'small',
-                                'props': {
-                                    'class': 'form-text text-muted'
-                                },
-                                'text': 'Cron表达式，默认每6小时执行一次增量同步'
                             }
                         ]
                     },
                     # 文件过滤
                     {
-                        'component': 'div',
-                        'props': {
-                            'class': 'form-row'
-                        },
+                        'component': 'VRow',
                         'content': [
                             {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'form-group col-md-6'
-                                },
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 6},
                                 'content': [
                                     {
-                                        'component': 'label',
+                                        'component': 'VTextField',
                                         'props': {
-                                            'for': 'file_filters'
-                                        },
-                                        'text': '文件类型过滤'
-                                    },
-                                    {
-                                        'component': 'input',
-                                        'props': {
-                                            'type': 'text',
-                                            'id': 'file_filters',
-                                            'name': 'file_filters',
+                                            'model': 'file_filters',
+                                            'label': '文件类型过滤',
                                             'placeholder': 'mp4,mkv,avi,mov',
-                                            'class': 'form-control'
+                                            'hint': '只同步指定类型的文件，用逗号分隔'
                                         }
-                                    },
-                                    {
-                                        'component': 'small',
-                                        'props': {
-                                            'class': 'form-text text-muted'
-                                        },
-                                        'text': '只同步指定类型的文件，用逗号分隔'
                                     }
                                 ]
                             },
                             {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'form-group col-md-6'
-                                },
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 6},
                                 'content': [
                                     {
-                                        'component': 'label',
+                                        'component': 'VTextField',
                                         'props': {
-                                            'for': 'exclude_patterns'
-                                        },
-                                        'text': '排除模式'
-                                    },
-                                    {
-                                        'component': 'input',
-                                        'props': {
-                                            'type': 'text',
-                                            'id': 'exclude_patterns',
-                                            'name': 'exclude_patterns',
+                                            'model': 'exclude_patterns',
+                                            'label': '排除模式',
                                             'placeholder': 'temp,cache,@eaDir',
-                                            'class': 'form-control'
+                                            'hint': '排除包含这些字符的文件/目录'
                                         }
-                                    },
-                                    {
-                                        'component': 'small',
-                                        'props': {
-                                            'class': 'form-text text-muted'
-                                        },
-                                        'text': '排除包含这些字符的文件/目录，用逗号分隔'
                                     }
                                 ]
                             }
@@ -691,72 +515,35 @@ class TransferSync(_PluginBase):
                     },
                     # 高级设置
                     {
-                        'component': 'div',
-                        'props': {
-                            'class': 'form-row'
-                        },
+                        'component': 'VRow',
                         'content': [
                             {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'form-group col-md-6'
-                                },
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 6},
                                 'content': [
                                     {
-                                        'component': 'label',
+                                        'component': 'VTextField',
                                         'props': {
-                                            'for': 'max_depth'
-                                        },
-                                        'text': '最大目录深度'
-                                    },
-                                    {
-                                        'component': 'input',
-                                        'props': {
+                                            'model': 'max_depth',
+                                            'label': '最大目录深度',
                                             'type': 'number',
-                                            'id': 'max_depth',
-                                            'name': 'max_depth',
-                                            'value': -1,
-                                            'class': 'form-control'
+                                            'hint': '限制同步的目录深度，-1表示无限制'
                                         }
-                                    },
-                                    {
-                                        'component': 'small',
-                                        'props': {
-                                            'class': 'form-text text-muted'
-                                        },
-                                        'text': '限制同步的目录深度，-1表示无限制'
                                     }
                                 ]
                             },
                             {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'form-group col-md-6'
-                                },
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 6},
                                 'content': [
                                     {
-                                        'component': 'label',
+                                        'component': 'VTextField',
                                         'props': {
-                                            'for': 'max_workers'
-                                        },
-                                        'text': '并发线程数'
-                                    },
-                                    {
-                                        'component': 'input',
-                                        'props': {
+                                            'model': 'max_workers',
+                                            'label': '并发线程数',
                                             'type': 'number',
-                                            'id': 'max_workers',
-                                            'name': 'max_workers',
-                                            'value': 4,
-                                            'class': 'form-control'
+                                            'hint': '同时进行同步的线程数量'
                                         }
-                                    },
-                                    {
-                                        'component': 'small',
-                                        'props': {
-                                            'class': 'form-text text-muted'
-                                        },
-                                        'text': '同时进行同步的线程数量'
                                     }
                                 ]
                             }
@@ -766,10 +553,10 @@ class TransferSync(_PluginBase):
             }
         ], {
             "enabled": False,
+            "source_path": "",
+            "target_path": "",
             "sync_paths": "",
             "delay_minutes": 5,
-            "enable_immediate_execution": True,
-            "incremental_cron": "0 */6 * * *",
             "enable_notifications": False,
             "sync_strategy": "copy",
             "sync_mode": "immediate",
@@ -788,8 +575,8 @@ class TransferSync(_PluginBase):
                 "enabled": self._enabled,
                 "sync_paths_count": len(self._sync_paths),
                 "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
-                "incremental_cron": self._incremental_cron,
-                "immediate_execution": self._enable_immediate_execution
+                "sync_mode": self._sync_mode.value if hasattr(self._sync_mode, 'value') else str(self._sync_mode),
+                "delay_minutes": self._delay_minutes
             }
 
             # 如果使用高级功能，添加更多状态信息
@@ -928,6 +715,61 @@ class TransferSync(_PluginBase):
             logger.error(f"测试路径失败: {str(e)}")
             return {"error": str(e)}
 
+    def browse_files(self, path: str = "/") -> Dict[str, Any]:
+        """文件浏览API - 用于路径选择"""
+        try:
+            import os
+            from pathlib import Path
+
+            # 验证路径安全性
+            if not path or path == "/":
+                path = os.path.expanduser("~")  # 默认从用户主目录开始
+
+            path_obj = Path(path)
+            if not path_obj.exists() or not path_obj.is_dir():
+                return {"error": "路径不存在或不是目录"}
+
+            # 获取目录内容
+            items = []
+            try:
+                # 添加父目录项
+                if str(path_obj) != str(path_obj.root):
+                    items.append({
+                        "name": "..",
+                        "path": str(path_obj.parent),
+                        "type": "dir",
+                        "size": 0,
+                        "is_parent": True
+                    })
+
+                # 列出目录内容
+                for item in sorted(path_obj.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+                    try:
+                        stat = item.stat()
+                        items.append({
+                            "name": item.name,
+                            "path": str(item),
+                            "type": "dir" if item.is_dir() else "file",
+                            "size": stat.st_size if item.is_file() else 0,
+                            "mtime": stat.st_mtime,
+                            "is_parent": False
+                        })
+                    except (OSError, PermissionError):
+                        # 跳过无权限访问的文件/目录
+                        continue
+
+            except PermissionError:
+                return {"error": "无权限访问该目录"}
+
+            return {
+                "success": True,
+                "current_path": str(path_obj),
+                "items": items
+            }
+
+        except Exception as e:
+            logger.error(f"浏览文件失败: {str(e)}")
+            return {"error": str(e)}
 
     def get_page(self) -> List[dict]:
         """获取插件页面"""
@@ -992,8 +834,6 @@ class TransferSync(_PluginBase):
                 self._sync_paths = []
 
         self._delay_minutes = config.get("delay_minutes", 5)
-        self._enable_immediate_execution = config.get("enable_immediate_execution", True)
-        self._incremental_cron = config.get("incremental_cron", "0 */6 * * *")
         self._enable_notifications = config.get("enable_notifications", False)
 
         # 解析枚举值
@@ -1122,24 +962,9 @@ class TransferSync(_PluginBase):
             logger.error(f"兼容模式：处理下载添加事件失败: {str(e)}")
 
     def get_service(self) -> List[Dict[str, Any]]:
-        """获取插件服务 - 启用默认增量同步"""
-        if not self._enabled or not self._sync_paths:
-            return []
-
-        services = []
-
-        # 默认启用增量同步定时任务
-        if self._incremental_cron:
-            services.append({
-                "id": "TransferSync_incremental_sync",
-                "name": "增量同步任务",
-                "trigger": "cron",
-                "cron": self._incremental_cron,
-                "func": self.incremental_sync,
-                "kwargs": {}
-            })
-
-        return services
+        """获取插件服务 - 暂不提供定时服务"""
+        # 移除定时任务，通过事件触发和手动同步执行
+        return []
 
     def stop_service(self):
         """停止服务"""

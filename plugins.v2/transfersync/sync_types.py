@@ -15,9 +15,13 @@ class SyncStrategy(Enum):
 
 class SyncMode(Enum):
     """同步模式"""
-    IMMEDIATE = "immediate"     # 立即同步
-    BATCH = "batch"            # 批量同步
-    QUEUE = "queue"            # 队列同步
+    IMMEDIATE = "immediate"     # 立即执行（无延迟）
+    DELAYED = "delayed"        # 延迟执行
+
+class SyncType(Enum):
+    """同步类型"""
+    INCREMENTAL = "incremental" # 增量同步（默认）
+    FULL = "full"              # 全量同步
 
 
 class FileFilterType(Enum):
