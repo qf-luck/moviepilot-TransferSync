@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 
 // 接收配置和刷新控制
 const props = defineProps({
@@ -22,25 +22,22 @@ const status = ref({
   enabled: false,
   sync_paths_count: 0,
   sync_strategy: '',
-  sync_type: '',
-  last_sync_time: null
+  last_sync_time: '',
+  total_synced_files: 0
 })
 
-// 加载状态
 const loading = ref(false)
+let refreshInterval: NodeJS.Timeout | null = null
 
-// 获取同步状态
+// 获取状态
 async function getStatus() {
-  if (!props.allowRefresh) return
+  if (!props.allowRefresh || !props.api) return
 
   loading.value = true
   try {
-    const result = await props.api?.get('sync_status')
+    const result = await props.api.get('sync_status')
     if (result && !result.error) {
-      status.value = {
-        ...result,
-        last_sync_time: new Date().toLocaleString()
-      }
+      status.value = result
     }
   } catch (error) {
     console.error('获取状态失败:', error)
@@ -49,125 +46,83 @@ async function getStatus() {
   }
 }
 
-// 格式化同步策略显示
-function formatStrategy(strategy: string): string {
-  const strategyMap: Record<string, string> = {
-    'copy': '复制',
-    'move': '移动',
-    'softlink': '软链接',
-    'hardlink': '硬链接'
-  }
-  return strategyMap[strategy] || strategy
-}
-
-// 格式化同步类型显示
-function formatSyncType(type: string): string {
-  const typeMap: Record<string, string> = {
-    'incremental': '增量',
-    'full': '全量'
-  }
-  return typeMap[type] || type
-}
-
+// 组件挂载时初始化
 onMounted(() => {
   getStatus()
-  // 如果允许刷新，设置定时刷新
   if (props.allowRefresh) {
-    setInterval(getStatus, 30000) // 30秒刷新一次
+    // 每30秒刷新一次状态
+    refreshInterval = setInterval(getStatus, 30000)
+  }
+})
+
+// 组件卸载时清理定时器
+onUnmounted(() => {
+  if (refreshInterval) {
+    clearInterval(refreshInterval)
   }
 })
 </script>
 
 <template>
-  <div class="dashboard-widget">
-    <v-card class="h-100">
-      <v-card-title class="d-flex align-center">
-        <v-icon class="mr-2">mdi-sync</v-icon>
-        {{ config.title || '整理后同步' }}
-        <v-spacer />
-        <v-chip
-          :color="status.enabled ? 'success' : 'error'"
-          size="small"
-          variant="flat"
-        >
-          {{ status.enabled ? '运行中' : '已停止' }}
-        </v-chip>
-      </v-card-title>
+  <v-card class="dashboard-widget">
+    <v-card-title class="d-flex align-center">
+      <v-icon class="mr-2" size="small">mdi-sync</v-icon>
+      {{ config.title || '整理后同步' }}
+      <v-spacer />
+      <v-chip
+        :color="status.enabled ? 'success' : 'error'"
+        size="x-small"
+        variant="flat"
+      >
+        {{ status.enabled ? '运行' : '停止' }}
+      </v-chip>
+    </v-card-title>
 
-      <v-card-text class="pb-2">
-        <v-row dense>
-          <!-- 路径数量 -->
-          <v-col cols="6">
-            <div class="text-center">
-              <div class="text-h5 text-primary font-weight-bold">
-                {{ status.sync_paths_count || 0 }}
-              </div>
-              <div class="text-caption text-medium-emphasis">
-                同步路径
-              </div>
-            </div>
-          </v-col>
-
-          <!-- 同步策略 -->
-          <v-col cols="6">
-            <div class="text-center">
-              <div class="text-h6 text-info">
-                {{ formatStrategy(status.sync_strategy) || '--' }}
-              </div>
-              <div class="text-caption text-medium-emphasis">
-                同步策略
-              </div>
-            </div>
-          </v-col>
-        </v-row>
-
-        <v-divider class="my-3" />
-
-        <!-- 详细信息 -->
-        <div class="text-body-2">
-          <div class="d-flex justify-space-between align-center mb-1">
-            <span class="text-medium-emphasis">同步类型:</span>
-            <span class="font-weight-medium">{{ formatSyncType(status.sync_type) || '未设置' }}</span>
+    <v-card-text class="pb-2">
+      <v-row dense>
+        <v-col cols="6">
+          <div class="text-center">
+            <div class="text-h6 text-primary">{{ status.sync_paths_count || 0 }}</div>
+            <div class="text-caption">同步路径</div>
           </div>
-
-          <div class="d-flex justify-space-between align-center mb-1">
-            <span class="text-medium-emphasis">状态:</span>
-            <v-chip
-              :color="status.enabled ? 'success' : 'grey'"
-              size="x-small"
-              variant="flat"
-            >
-              {{ status.enabled ? '启用' : '禁用' }}
-            </v-chip>
+        </v-col>
+        <v-col cols="6">
+          <div class="text-center">
+            <div class="text-subtitle-2">{{ status.sync_strategy || '--' }}</div>
+            <div class="text-caption">同步策略</div>
           </div>
+        </v-col>
+      </v-row>
 
-          <div v-if="status.last_sync_time" class="d-flex justify-space-between align-center">
-            <span class="text-medium-emphasis">更新时间:</span>
-            <span class="text-caption">{{ status.last_sync_time }}</span>
+      <v-row dense class="mt-2" v-if="status.total_synced_files > 0">
+        <v-col cols="12">
+          <div class="text-center">
+            <div class="text-subtitle-2 text-info">{{ status.total_synced_files }}</div>
+            <div class="text-caption">已同步文件</div>
           </div>
-        </div>
-      </v-card-text>
+        </v-col>
+      </v-row>
 
-      <v-card-actions class="pt-0">
-        <v-btn
-          size="small"
-          variant="text"
-          prepend-icon="mdi-refresh"
-          :loading="loading"
-          @click="getStatus"
-        >
-          刷新
-        </v-btn>
-        <v-spacer />
-        <v-icon
-          :class="status.enabled ? 'text-success' : 'text-grey'"
-          size="20"
-        >
-          {{ status.enabled ? 'mdi-check-circle' : 'mdi-pause-circle' }}
-        </v-icon>
-      </v-card-actions>
-    </v-card>
-  </div>
+      <v-row dense class="mt-2" v-if="status.last_sync_time">
+        <v-col cols="12">
+          <div class="text-caption text-center text-medium-emphasis">
+            上次同步：{{ status.last_sync_time }}
+          </div>
+        </v-col>
+      </v-row>
+    </v-card-text>
+
+    <v-card-actions class="pt-0">
+      <v-btn
+        size="small"
+        variant="text"
+        :loading="loading"
+        @click="getStatus"
+      >
+        刷新
+      </v-btn>
+    </v-card-actions>
+  </v-card>
 </template>
 
 <style scoped>
@@ -175,22 +130,18 @@ onMounted(() => {
   height: 100%;
 }
 
-:deep(.v-card) {
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
 :deep(.v-card-title) {
-  font-size: 1.1rem;
-  font-weight: 500;
   padding-bottom: 8px;
+  font-size: 1rem;
 }
 
 :deep(.v-card-text) {
-  padding: 12px 16px;
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
 :deep(.v-card-actions) {
-  padding: 8px 16px 12px;
+  padding-top: 0;
+  padding-bottom: 8px;
 }
 </style>
