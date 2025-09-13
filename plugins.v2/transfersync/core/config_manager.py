@@ -6,7 +6,7 @@ from pathlib import Path
 from app.log import logger
 from app.core.cache import cached
 
-from ..sync_types import SyncStrategy, SyncMode, TriggerEvent
+from ..sync_types import SyncStrategy, SyncType, ExecutionMode, TriggerEvent
 from ..config_validator import ConfigValidator
 
 
@@ -37,7 +37,8 @@ class ConfigManager:
 
             # 高级配置
             "sync_strategy": self._parse_sync_strategy(config.get("sync_strategy", "copy")),
-            "sync_mode": self._parse_sync_mode(config.get("sync_mode", "immediate")),
+            "execution_mode": self._parse_execution_mode(config.get("execution_mode", "immediate")),
+            "sync_type": self._parse_sync_type(config.get("sync_type", "incremental")),
             "max_depth": config.get("max_depth", -1),
             "file_filters": self._parse_list(config.get("file_filters", "")),
             "exclude_patterns": self._parse_list(config.get("exclude_patterns", "")),
@@ -115,13 +116,21 @@ class ConfigManager:
             logger.warning(f"无效的同步策略: {strategy_str}, 使用默认值 copy")
             return SyncStrategy.COPY
 
-    def _parse_sync_mode(self, mode_str: str) -> SyncMode:
-        """解析同步模式"""
+    def _parse_execution_mode(self, mode_str: str) -> ExecutionMode:
+        """解析执行模式"""
         try:
-            return SyncMode(mode_str)
+            return ExecutionMode(mode_str)
         except ValueError:
-            logger.warning(f"无效的同步模式: {mode_str}, 使用默认值 immediate")
-            return SyncMode.IMMEDIATE
+            logger.warning(f"无效的执行模式: {mode_str}, 使用默认值 immediate")
+            return ExecutionMode.IMMEDIATE
+
+    def _parse_sync_type(self, type_str: str) -> SyncType:
+        """解析同步类型"""
+        try:
+            return SyncType(type_str)
+        except ValueError:
+            logger.warning(f"无效的同步类型: {type_str}, 使用默认值 incremental")
+            return SyncType.INCREMENTAL
 
     def _parse_trigger_events(self, events_config: Any) -> List[TriggerEvent]:
         """解析触发事件"""

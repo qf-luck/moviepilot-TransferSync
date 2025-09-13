@@ -12,7 +12,7 @@ from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 
 from app.log import logger
-from .sync_types import SyncStrategy, SyncMode, SyncStatus
+from .sync_types import SyncStrategy, SyncType, ExecutionMode, SyncStatus
 from .exceptions import SyncException, SyncPermissionError, SyncSpaceError
 from .file_operations import AtomicFileOperation
 
