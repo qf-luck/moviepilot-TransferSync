@@ -176,7 +176,7 @@ class SyncOperations:
                 actual_target = Path(target_path)
 
             # 更新同步状态
-            self.current_status = SyncStatus.SYNCING
+            self.current_status = SyncStatus.RUNNING
 
             # 获取同步策略
             sync_strategy = getattr(self.plugin, '_sync_strategy', SyncStrategy.COPY)
@@ -233,11 +233,16 @@ class SyncOperations:
             elif strategy == SyncStrategy.MOVE:
                 shutil.move(str(source_file), str(target_file))
                 logger.info(f"移动文件: {source_file} -> {target_file}")
-            elif strategy == SyncStrategy.LINK:
+            elif strategy == SyncStrategy.SOFTLINK:
                 if target_file.exists():
                     target_file.unlink()
                 target_file.symlink_to(source_file)
-                logger.info(f"创建链接: {source_file} -> {target_file}")
+                logger.info(f"创建软链接: {source_file} -> {target_file}")
+            elif strategy == SyncStrategy.HARDLINK:
+                if target_file.exists():
+                    target_file.unlink()
+                target_file.hardlink_to(source_file)
+                logger.info(f"创建硬链接: {source_file} -> {target_file}")
 
             return 1
 
