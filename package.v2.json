@@ -1,5 +1,5 @@
 {
-  "Cd2Assistant": {
+  "Cd2Tool": {
     "name": "Cd2助手",
     "description": "监控上传任务，检测是否有异常，发送通知。",
     "labels": "CloudDrive2,监控,通知,助手",

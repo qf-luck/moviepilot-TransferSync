@@ -24,7 +24,7 @@ from app.plugins import _PluginBase
 from app.schemas import NotificationType
 from app.schemas.types import EventType
 
-class Cd2Assistant(_PluginBase):
+class Cd2Tool(_PluginBase):
     # 插件名称
     plugin_name = "Cd2助手"
     # 插件描述
@@ -38,7 +38,7 @@ class Cd2Assistant(_PluginBase):
     # 作者主页
     author_url = "https://github.com/qf-luck/moviepilot-TransferSync"
     # 插件配置项ID前缀
-    plugin_config_prefix = "cd2assistant_"
+    plugin_config_prefix = "Cd2Tool_"
     # 加载顺序
     plugin_order = 5
     # 可使用的用户级别
