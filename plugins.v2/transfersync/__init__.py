@@ -22,7 +22,29 @@ except ImportError:
     ServiceManager = None
 
 # 导入功能模块
-from .sync_types import SyncStrategy, SyncType, ExecutionMode, TriggerEvent
+# 定义枚举类型
+from enum import Enum
+
+class SyncStrategy(Enum):
+    COPY = "copy"
+    MOVE = "move"
+    SOFTLINK = "softlink"
+    HARDLINK = "hardlink"
+
+class SyncType(Enum):
+    INCREMENTAL = "incremental"
+    FULL = "full"
+
+class ExecutionMode(Enum):
+    IMMEDIATE = "immediate"
+    DELAYED = "delayed"
+
+class TriggerEvent(Enum):
+    TRANSFER_COMPLETE = "transfer.complete"
+    DOWNLOAD_ADDED = "download.added"
+    SUBSCRIBE_COMPLETE = "subscribe.complete"
+    MEDIA_ADDED = "media.added"
+    FILE_MOVED = "file.moved"
 from .sync_operations import SyncOperations
 from .command_handler import CommandHandler
 
