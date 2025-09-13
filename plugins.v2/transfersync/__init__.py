@@ -1,399 +1,617 @@
-"""
-整理后同步插件 - 重构版本
-参考 p115strmhelper 的模块化设计，将功能拆分到不同模块
-"""
-import threading
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from datetime import datetime, timedelta
+from typing import Any, List, Dict, Tuple, Optional
 
-from app.plugins import _PluginBase
+import pytz
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+from clouddrive import CloudDriveClient, Client
+from clouddrive.proto import CloudDrive_pb2
+
+from app import schemas
+from app.core.config import settings
+from app.core.event import eventmanager, Event
 from app.log import logger
-from app.core.cache import cached
+from app.plugins import _PluginBase
+from app.schemas import NotificationType
+from app.schemas.types import EventType
 
-# 导入核心模块
-try:
-    from .core.config_manager import ConfigManager
-    from .core.event_manager import EventManager
-    from .core.service_manager import ServiceManager
-except ImportError:
-    # 如果模块导入失败，使用简化版本
-    logger.warning("核心模块导入失败，使用兼容模式")
-    ConfigManager = None
-    EventManager = None
-    ServiceManager = None
-
-# 导入功能模块
-# 定义枚举类型
-from enum import Enum
-
-class SyncStrategy(Enum):
-    COPY = "copy"
-    MOVE = "move"
-    SOFTLINK = "softlink"
-    HARDLINK = "hardlink"
-
-class SyncType(Enum):
-    INCREMENTAL = "incremental"
-    FULL = "full"
-
-class ExecutionMode(Enum):
-    IMMEDIATE = "immediate"
-    DELAYED = "delayed"
-
-class TriggerEvent(Enum):
-    TRANSFER_COMPLETE = "transfer.complete"
-    DOWNLOAD_ADDED = "download.added"
-    SUBSCRIBE_COMPLETE = "subscribe.complete"
-    MEDIA_ADDED = "media.added"
-    FILE_MOVED = "file.moved"
-from .sync_operations import SyncOperations
-from .command_handler import CommandHandler
-
-
-class TransferSync(_PluginBase):
+class Cd2Assistant(_PluginBase):
     # 插件名称
-    plugin_name = "整理后同步"
+    plugin_name = "CloudDrive2助手"
     # 插件描述
-    plugin_desc = "监听多种事件类型自动同步文件到指定位置，支持多种同步策略，默认启用增量同步，简化配置更易使用。"
+    plugin_desc = "监控上传任务，检测是否有异常，发送通知。"
     # 插件图标
-    plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/sync.png"
+    plugin_icon = "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png"
     # 插件版本
-    plugin_version = "1.5"
+    plugin_version = "2.0.5"
     # 插件作者
-    plugin_author = "MoviePilot"
+    plugin_author = "thsrite"
     # 作者主页
-    author_url = "https://github.com/jxxghp/MoviePilot-Plugins"
+    author_url = "https://github.com/qf-luck/moviepilot-TransferSync"
     # 插件配置项ID前缀
-    plugin_config_prefix = "transfersync_"
+    plugin_config_prefix = "cd2Tool_"
     # 加载顺序
-    plugin_order = 20
+    plugin_order = 5
     # 可使用的用户级别
     auth_level = 2
 
-    def __init__(self):
-        super().__init__()
-        # 初始化管理器
-        if ConfigManager is not None:
-            self._config_manager = ConfigManager()
-            self._event_manager = EventManager(self)
-            self._service_manager = ServiceManager()
-            self._use_advanced_features = True
-        else:
-            # 兼容模式：使用简化功能
-            self._config_manager = None
-            self._event_manager = None
-            self._service_manager = None
-            self._use_advanced_features = False
-            logger.info("TransferSync 运行在兼容模式下")
+    # 任务执行间隔
+    _enabled = False
+    _onlyonce: bool = False
+    _cd2_restart: bool = False
+    _cron = None
+    _notify = False
+    _msgtype = None
+    _keyword = None
+    _black_dir = None
+    _cloud_path = None
+    _cd2_confs = None
+    _cd2_clients = {}
+    _clients = {}
+    _cd2_url = {}
 
-        # 插件状态
-        self._enabled = False
-        self._lock = threading.Lock()
-
-        # 配置属性 - 按要求重新设计
-        self._source_path = ""  # 源路径
-        self._target_path = ""  # 目标路径
-        self._delay_minutes = 5
-        self._enable_notifications = False
-        self._notification_channel = "telegram"  # 通知渠道
-        self._sync_strategy = SyncStrategy.COPY
-        self._sync_type = SyncType.INCREMENTAL  # 增量同步/全量同步策略
-        self._execution_mode = ExecutionMode.IMMEDIATE  # 立即/延迟执行
-        self._max_depth = -1
-        self._file_filters = []
-        self._exclude_patterns = []
-        self._max_workers = 4
-        self._trigger_events = [TriggerEvent.TRANSFER_COMPLETE]
-
-        # 初始化功能模块
-        self._sync_ops = None
-        self._command_handler = None
+    _scheduler: Optional[BackgroundScheduler] = None
 
     def init_plugin(self, config: dict = None):
-        """初始化插件"""
-        try:
-            if config:
-                if self._use_advanced_features and self._config_manager:
-                    # 使用配置管理器解析配置
-                    parsed_config = self._config_manager.parse_config(config)
-                    self._apply_config(parsed_config)
-                else:
-                    # 兼容模式：直接解析配置
-                    self._apply_config_compatible(config)
+        self._cd2_clients = {}
+        self._clients = {}
+        self._cd2_url = {}
+        if config:
+            self._enabled = config.get("enabled")
+            self._notify = config.get("notify")
+            self._msgtype = config.get("msgtype")
+            self._onlyonce = config.get("onlyonce")
+            self._cd2_restart = config.get("cd2_restart")
+            self._cron = config.get("cron")
+            self._keyword = config.get("keyword")
+            self._cd2_confs = config.get("cd2_confs")
+            self._black_dir = config.get("black_dir") or ""
+            self._cloud_path = config.get("cloud_path") or ""
 
-            # 初始化功能模块
-            self._sync_ops = SyncOperations(self)
+            # 兼容旧版本配置
+            self.__sync_old_config()
 
-            # 注册事件监听器
-            if self._enabled:
-                if self._use_advanced_features and self._event_manager:
-                    self._event_manager.register_event_listeners(self._trigger_events)
-                    logger.info("TransferSync插件已启用，事件监听器已注册")
-                else:
-                    # 兼容模式：使用简化的事件注册
-                    self._register_event_listeners_compatible()
-                    logger.info("TransferSync插件已启用（兼容模式），事件监听器已注册")
+        # 停止现有任务
+        self.stop_service()
 
-            logger.info("TransferSync插件初始化完成")
+        if self._enabled or self._onlyonce or self._cd2_restart:
+            if not self._cd2_confs:
+                logger.error("CloudDrive2助手配置错误，请检查配置")
+                return
 
-        except Exception as e:
-            logger.error(f"TransferSync插件初始化失败: {str(e)}")
+            for cd2_conf in self._cd2_confs.split("\n"):
+                _cd2_client = CloudDriveClient(str(cd2_conf).split("#")[1], str(cd2_conf).split("#")[2],
+                                               str(cd2_conf).split("#")[3])
+                _cd2_name = str(cd2_conf).split("#")[0]
+                if not _cd2_client:
+                    logger.error(f"CloudDrive2助手连接失败，请检查配置：{_cd2_name}")
+                    continue
+                _client = Client(str(cd2_conf).split("#")[1], str(cd2_conf).split("#")[2],
+                                 str(cd2_conf).split("#")[3])
+                if not _client:
+                    logger.error("CloudDrive2助手连接失败，请检查配置")
+                    continue
+                self._cd2_clients[_cd2_name] = _cd2_client
+                self._clients[_cd2_name] = _client
+                self._cd2_url[_cd2_name] = str(cd2_conf).split("#")[1]
 
-    def _apply_config(self, config: Dict[str, Any]):
-        """应用解析后的配置 - 按要求修改"""
-        self._enabled = config.get("enabled", False)
-        self._source_path = config.get("source_path", "")
-        self._target_path = config.get("target_path", "")
-        self._delay_minutes = config.get("delay_minutes", 5)
-        self._enable_notifications = config.get("enable_notifications", False)
-        self._notification_channel = config.get("notification_channel", "telegram")
-        self._sync_strategy = config.get("sync_strategy", SyncStrategy.COPY)
-        self._sync_type = config.get("sync_type", SyncType.INCREMENTAL)
-        self._execution_mode = config.get("execution_mode", ExecutionMode.IMMEDIATE)
-        self._max_depth = config.get("max_depth", -1)
-        self._file_filters = config.get("file_filters", [])
-        self._exclude_patterns = config.get("exclude_patterns", [])
-        self._max_workers = config.get("max_workers", 4)
-        self._trigger_events = config.get("trigger_events", [TriggerEvent.TRANSFER_COMPLETE])
+            # 周期运行
+            self._scheduler = BackgroundScheduler(timezone=settings.TZ)
 
-    @property
-    def command_handler(self):
-        """延迟初始化命令处理器"""
-        if self._command_handler is None:
-            self._command_handler = CommandHandler(self)
-        return self._command_handler
+            if self._cron:
+                try:
+                    self._scheduler.add_job(func=self.check,
+                                            trigger=CronTrigger.from_crontab(self._cron),
+                                            name="CloudDrive2助手定时任务")
+                except Exception as err:
+                    logger.error(f"定时任务配置错误：{err}")
+                    # 推送实时消息
+                    self.systemmessage.put(f"执行周期配置错误：{err}")
+
+            # 立即运行一次
+            if self._onlyonce:
+                logger.info(f"CloudDrive2助手定时任务，立即运行一次")
+                self._scheduler.add_job(self.check, 'date',
+                                        run_date=datetime.now(
+                                            tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
+                                        name="CloudDrive2助手定时任务")
+                # 关闭一次性开关
+                self._onlyonce = False
+
+                # 保存配置
+                self.__update_config()
+
+            # 立即运行一次
+            if self._cd2_restart:
+                logger.info(f"CloudDrive2重启任务，立即运行一次")
+                self._scheduler.add_job(self.restart_cd2(), 'date',
+                                        run_date=datetime.now(
+                                            tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
+                                        name="CloudDrive2重启任务")
+                # 关闭一次性开关
+                self._cd2_restart = False
+
+                # 保存配置
+                self.__update_config()
+
+            # 启动任务
+            if self._scheduler.get_jobs():
+                self._scheduler.print_jobs()
+                self._scheduler.start()
+
+    def __sync_old_config(self):
+        """
+        兼容旧版本配置
+        """
+        config = self.get_config()
+        if not config or not config.get("cd2_url") or not config.get("cd2_username") or not config.get("cd2_password"):
+            return
+
+        self._cd2_confs = f"默认配置1#{config.get('cd2_url')}#{config.get('cd2_username')}#{config.get('cd2_password')}"
+        self.__update_config()
+
+    def __update_config(self):
+        self.update_config({
+            "enabled": self._enabled,
+            "onlyonce": self._onlyonce,
+            "cd2_restart": self._cd2_restart,
+            "cron": self._cron,
+            "msgtype": self._msgtype,
+            "keyword": self._keyword,
+            "notify": self._notify,
+            "cd2_confs": self._cd2_confs,
+            "black_dir": self._black_dir,
+            "cloud_path": self._cloud_path,
+        })
+
+    def check(self):
+        """
+        检查
+        """
+        for cd2_name in self._cd2_clients.keys():
+            _cd2_client = self._cd2_clients.get(cd2_name)
+            self.__check_cookie(cd2_name, _cd2_client)
+            self.__check_task(cd2_name, _cd2_client)
+
+    def __check_cookie(self, cd2_name, cd2_client):
+        """
+        检查cookie是否过期
+        """
+        logger.info(f"开始检查 {cd2_name} cookie")
+        if not cd2_client:
+            logger.error("CloudDrive2助手连接失败，请检查配置")
+            return
+        fs = cd2_client.fs
+        if not fs:
+            logger.error("CloudDrive2连接失败，请检查配置")
+            return
+
+        for f in fs.listdir():
+            error_msg = None
+            if f and f not in self._black_dir.split(","):
+                try:
+                    cloud_file = fs.listdir(f)
+                    if not cloud_file or len(cloud_file) == 0:
+                        logger.warning(f"云盘 {f} 为空")
+                        error_msg = f"云盘 {f} cookie过期"
+                except Exception as err:
+                    logger.error(f"云盘 {f} cookie过期：{err}")
+                    if "429" in str(err):
+                        error_msg = f"云盘 {f} 访问频率过高，请稍后再试"
+                    else:
+                        error_msg = f"云盘 {f} cookie过期"
+
+            # 发送通知
+            if self._notify and error_msg:
+                self.__send_notify(error_msg)
+
+    def __check_task(self, cd2_name, cd2_client):
+        """
+        检查上传任务
+        """
+        logger.info(f"开始检查 {cd2_name} 上传任务")
+        # 获取上传任务列表
+        upload_tasklist = cd2_client.upload_tasklist.list(page=0, page_size=10, filter="")
+        if not upload_tasklist:
+            logger.info("没有发现上传任务")
+            return
+
+        for task in upload_tasklist:
+            if task.get("status") == "FatalError" and self._keyword and re.search(self._keyword,
+                                                                                  task.get("errorMessage")):
+                logger.info(f"发现异常上传任务：{task.get('errorMessage')}")
+                # 发送通知
+                if self._notify:
+                    self.__send_notify(task.get("errorMessage"))
+                    break
+
+    @eventmanager.register(EventType.PluginAction)
+    def restart_cd2(self, event: Event = None):
+        """
+        重启CloudDrive2
+        """
+        if event:
+            event_data = event.event_data
+            if not event_data or event_data.get("action") != "cd2_restart":
+                return
+            args = event_data.get("arg_str")
+            found = False
+            for cd2_name, client in self._clients.items():
+                if args and str(args).lower() != str(cd2_name):
+                    continue
+                found = True
+                self.post_message(channel=event.event_data.get("channel"),
+                                  title=f"{cd2_name} CloudDrive2重启成功！", userid=event.event_data.get("user"))
+                client.RestartService()
+
+            if args and not found:
+                self.post_message(channel=event.event_data.get("channel"),
+                                  title=f"未找到 {args} 配置！", userid=event.event_data.get("user"))
+                return
+        else:
+            for cd2_name in self._clients.keys():
+                _client = self._clients.get(cd2_name)
+                logger.info(f"{cd2_name} CloudDrive2重启成功")
+                _client.RestartService()
+
+    def __get_cloud_space(self, cd2_client):
+        """
+        获取云盘空间
+        """
+        fs = cd2_client.fs
+        if not fs:
+            logger.error("CloudDrive2连接失败，请检查配置")
+            return
+
+        _space_info = "\n"
+        for f in fs.listdir():
+            try:
+                if f and f not in self._black_dir.split(","):
+                    space_info = cd2_client.GetSpaceInfo(CloudDrive_pb2.FileRequest(path=f))
+                    space_info = self.__str_to_dict(space_info)
+                    total = self.__convert_bytes(space_info.get("totalSpace"))
+                    used = self.__convert_bytes(space_info.get("usedSpace"))
+                    free = self.__convert_bytes(space_info.get("freeSpace"))
+                    _space_info += f"{f}：{used}/{total}\n"
+            except Exception:
+                logger.error(f"获取云盘 {f} 空间信息失败")
+
+        return _space_info
+
+    @eventmanager.register(EventType.PluginAction)
+    def add_offline_files(self, event: Event = None):
+        """
+        离线下载
+        """
+        if event:
+            event_data = event.event_data
+            if not event_data or event_data.get("action") != "cloud_download":
+                return
+            args = event_data.get("arg_str")
+            if not args:
+                logger.error(f"缺少参数：{event_data}")
+                return
+
+            # 判断有无指定路径
+            args = args.replace(" ", "\n")
+            _cloud_path = self._cloud_path.strip()
+            if args.split("\n")[0].startswith("/"):
+                _cloud_path = str(args.split("\n")[0])
+                args = args.replace(f"{_cloud_path}\n", "")
+            if not _cloud_path:
+                logger.error("请先设置云盘路径")
+                if event.event_data.get("user"):
+                    self.post_message(channel=event.event_data.get("channel"),
+                                      title=f"请先设置云盘路径！",
+                                      userid=event.event_data.get("user"))
+                return
+
+            logger.info(f"获取到离线云盘路径：{_cloud_path}")
+            logger.info(f"开始离线下载：{args}")
+
+            client = None
+            for cd2_name, client in self._clients.items():
+                if client:
+                    break
+
+            result = client.AddOfflineFiles(
+                CloudDrive_pb2.AddOfflineFileRequest(urls=args, toFolder=_cloud_path))
+            if result and result.success:
+                logger.info(f"离线下载成功")
+                if event.event_data.get("user"):
+                    self.post_message(channel=event.event_data.get("channel"),
+                                      title=f"{_cloud_path} 离线下载成功！",
+                                      userid=event.event_data.get("user"))
+            else:
+                errorMessage = None
+                if result and result.errorMessage:
+                    errorMessage = result.errorMessage
+                logger.error(f"离线下载失败：{errorMessage}")
+                if event.event_data.get("user"):
+                    self.post_message(channel=event.event_data.get("channel"),
+                                      title=f"离线下载失败！",
+                                      userid=event.event_data.get("user"),
+                                      text=f"错误信息：{errorMessage}")
+
+    @eventmanager.register(EventType.PluginAction)
+    def cd2_info(self, event: Event = None):
+        """
+        获取CloudDrive2信息
+        """
+        if event:
+            event_data = event.event_data
+            if not event_data or event_data.get("action") != "cd2_info":
+                return
+
+            args = event_data.get("arg_str")
+            found = False
+            for cd2_name, client in self._clients.items():
+                if args and str(args).lower() != str(cd2_name):
+                    continue
+                found = True
+                cd2_client = self._cd2_clients[cd2_name]
+                self.__get_cd2_info(event=event, client=client, cd2_client=cd2_client)
+
+            if args and not found:
+                self.post_message(channel=event.event_data.get("channel"),
+                                  title=f"未找到 {args} 配置！", userid=event.event_data.get("user"))
+                return
+
+    def __get_cd2_info(self, event: Event = None, client: Client = None, cd2_client: CloudDriveClient = None):
+        """
+        获取CloudDrive2信息
+        """
+        # 运行信息
+        system_info = client.GetRunningInfo()
+        system_info = self.__str_to_dict(system_info) if system_info else {}
+
+        # 任务数量
+        task_count = client.GetAllTasksCount()
+        task_count = self.__str_to_dict(task_count) if task_count else {}
+
+        # 速度
+        downloadFileList = client.GetDownloadFileList()
+        downloadFileList = self.__str_to_dict(downloadFileList) if downloadFileList else {}
+        uploadFileList = client.GetUploadFileList(CloudDrive_pb2.GetUploadFileListRequest(getAll=True))
+        uploadFileList = self.__str_to_dict(uploadFileList) if uploadFileList else {}
+
+        # 云盘空间
+        cloud_space = self.__get_cloud_space(cd2_client)
+
+        system_info_dict = {
+            "cpuUsage": f"{system_info.get('cpuUsage'):.2f}%" if system_info.get(
+                "cpuUsage") else "0.00%" if system_info else None,
+            "memUsageKB": f"{system_info.get('memUsageKB') / 1024:.2f}MB" if system_info.get(
+                "memUsageKB") else "0MB" if system_info else None,
+            "uptime": self.convert_seconds(system_info.get('uptime')) if system_info.get(
+                "uptime") else "0秒" if system_info else None,
+            "fhTableCount": system_info.get('fhTableCount') if system_info.get(
+                "fhTableCount") else 0 if system_info else None,
+            "dirCacheCount": int(system_info.get('dirCacheCount')) if system_info.get(
+                "dirCacheCount") else 0 if system_info else None,
+            "tempFileCount": system_info.get('tempFileCount') if system_info.get(
+                "tempFileCount") else 0 if system_info else None,
+            "upload_count": task_count.get("uploadCount") if task_count.get("uploadCount") else 0,
+            "download_count": task_count.get("downloadCount") if task_count.get("downloadCount") else 0,
+            "download_speed": f"{downloadFileList.get('globalBytesPerSecond') / 1024 / 1024:.2f}MB/s" if downloadFileList.get(
+                "globalBytesPerSecond") else "0KB/s" if downloadFileList else "0KB/s",
+            "upload_speed": f"{uploadFileList.get('globalBytesPerSecond') / 1024 / 1024:.2f}MB/s" if uploadFileList.get(
+                "globalBytesPerSecond") else "0KB/s" if uploadFileList else "0KB/s",
+            "cloud_space": cloud_space
+        }
+
+        logger.info(f"获取CloudDrive2系统信息：\n{system_info_dict}")
+
+        if event:
+            self.post_message(channel=event.event_data.get("channel"),
+                              title="CloudDrive2系统信息",
+                              userid=event.event_data.get("user"),
+                              text=f"CPU占用：{system_info_dict.get('cpuUsage')}\n"
+                                   f"内存占用：{system_info_dict.get('memUsageKB')}\n"
+                                   f"运行时间：{system_info_dict.get('uptime')}\n"
+                                   f"打开文件数量：{system_info_dict.get('fhTableCount')}\n"
+                                   f"目录缓存数量：{system_info_dict.get('dirCacheCount')}\n"
+                                   f"临时文件数量：{system_info_dict.get('tempFileCount')}\n"
+                                   f"上传任务数量：{system_info_dict.get('upload_count')}\n"
+                                   f"下载任务数量：{system_info_dict.get('download_count')}\n"
+                                   f"下载速度：{system_info_dict.get('download_speed')}\n"
+                                   f"上传速度：{system_info_dict.get('upload_speed')}\n"
+                                   f"存储空间：{system_info_dict.get('cloud_space')}\n")
+
+        return system_info_dict
+
+    def homepage(self, apikey: str, name: str = None) -> Any:
+        """
+        homepage自定义api
+        """
+        if apikey != settings.API_TOKEN:
+            return schemas.Response(success=False, message="API密钥错误")
+
+        client = None
+        cd2_client = None
+        for cd2_name, client in self._clients.items():
+            if name and str(cd2_name) != name:
+                continue
+            cd2_client = self._cd2_clients[cd2_name]
+            if client and cd2_client:
+                break
+
+        return self.__get_cd2_info(client=client, cd2_client=cd2_client)
+
+    @staticmethod
+    def __convert_bytes(size_in_bytes):
+        """ Convert bytes to the most appropriate unit (PB, TB, GB, etc.) """
+        units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+        unit_index = 0
+
+        while size_in_bytes >= 1024 and unit_index < len(units) - 1:
+            size_in_bytes /= 1024
+            unit_index += 1
+
+        return f"{size_in_bytes:.2f} {units[unit_index]}"
+
+    @staticmethod
+    def __str_to_dict(str_data):
+        """
+        字符串转字典
+        """
+        pattern = re.compile(r'(\w+): ([\d.]+)')
+        matches = pattern.findall(str(str_data))
+        # 将匹配到的结果转换为字典
+        return {key: float(value) for key, value in matches}
+
+    def __send_notify(self, msg):
+        """
+        发送通知
+        """
+        mtype = NotificationType.Manual
+        if self._msgtype:
+            mtype = NotificationType.__getitem__(str(self._msgtype)) or NotificationType.Manual
+        self.post_message(title="CloudDrive2助手通知",
+                          mtype=mtype,
+                          text=msg)
+
+    @staticmethod
+    def convert_seconds(seconds):
+        days, seconds = divmod(seconds, 86400)  # 86400秒 = 1天
+        hours, seconds = divmod(seconds, 3600)  # 3600秒 = 1小时
+        minutes, seconds = divmod(seconds, 60)  # 60秒 = 1分钟
+        parts = []
+        if days > 0:
+            parts.append(f"{int(days)}天")
+        if hours > 0:
+            parts.append(f"{int(hours)}小时")
+        if minutes > 0:
+            parts.append(f"{int(minutes)}分钟")
+        if seconds > 0 or not parts:  # 添加秒数或只有秒数时
+            parts.append(f"{seconds:.0f}秒")
+
+        return ''.join(parts)
 
     def get_state(self) -> bool:
-        """获取插件状态"""
         return self._enabled
 
-    def stop_service(self):
-        """停止服务"""
-        try:
-            # 取消事件监听
-            self._event_manager.unregister_event_listeners()
-
-            # 清理服务管理器
-            self._service_manager.shutdown()
-
-            logger.info("TransferSync服务已停止")
-        except Exception as e:
-            logger.error(f"停止TransferSync服务失败: {str(e)}")
-
-    # 配置表单相关方法
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
-        """获取插件命令 - 简化版本"""
         return [
             {
-                "action": "manual_sync",
-                "name": "手动同步",
-                "icon": "mdi-sync",
-                "desc": "立即执行手动同步操作"
+                "cmd": "/cd2_restart",
+                "event": EventType.PluginAction,
+                "desc": "CloudDrive2重启",
+                "category": "",
+                "data": {
+                    "action": "cd2_restart"
+                }
             },
             {
-                "action": "incremental_sync",
-                "name": "增量同步",
-                "icon": "mdi-update",
-                "desc": "执行增量同步，只同步有变化的文件"
+                "cmd": "/cd2_info",
+                "event": EventType.PluginAction,
+                "desc": "CloudDrive2系统信息",
+                "category": "",
+                "data": {
+                    "action": "cd2_info"
+                }
             },
             {
-                "action": "sync_status",
-                "name": "同步状态",
-                "icon": "mdi-information",
-                "desc": "查看当前同步状态和统计信息"
-            },
-            {
-                "action": "test_paths",
-                "name": "测试路径",
-                "icon": "mdi-test-tube",
-                "desc": "测试同步路径的可访问性和权限"
+                "cmd": "/cd",
+                "event": EventType.PluginAction,
+                "desc": "云下载",
+                "category": "",
+                "data": {
+                    "action": "cloud_download"
+                }
             }
         ]
 
     def get_api(self) -> List[Dict[str, Any]]:
-        """获取插件API - 包含文件管理器支持"""
-        return [
-            {
-                "path": "/sync_status",
-                "endpoint": self.sync_status,
-                "methods": ["GET"],
-                "summary": "获取同步状态",
-                "description": "获取当前同步状态、统计信息和健康状态"
-            },
-            {
-                "path": "/manual_sync",
-                "endpoint": self.manual_sync,
-                "methods": ["POST"],
-                "summary": "手动触发同步",
-                "description": "立即执行手动同步操作"
-            },
-            {
-                "path": "/incremental_sync",
-                "endpoint": self.incremental_sync,
-                "methods": ["POST"],
-                "summary": "增量同步",
-                "description": "执行增量同步，只同步有变化的文件"
-            },
-            {
-                "path": "/test_paths",
-                "endpoint": self.test_paths,
-                "methods": ["GET"],
-                "summary": "测试路径",
-                "description": "测试同步路径的可访问性和权限"
-            },
-            {
-                "path": "/browse_files",
-                "endpoint": self.browse_files,
-                "methods": ["GET"],
-                "auth": "bear",
-                "summary": "浏览文件目录",
-                "description": "用于路径选择的文件管理器接口，支持Vue前端"
-            },
-            {
-                "path": "/browse_path",
-                "endpoint": self.browse_path,
-                "methods": ["POST"],
-                "auth": "bear",
-                "summary": "浏览指定路径",
-                "description": "浏览指定路径的文件和目录"
-            },
-            {
-                "path": "/get_config_api",
-                "endpoint": self.get_config_api,
-                "methods": ["GET"],
-                "summary": "获取配置API",
-                "description": "为前端提供配置数据"
-            },
-            {
-                "path": "/save_config_api",
-                "endpoint": self.save_config_api,
-                "methods": ["POST"],
-                "summary": "保存配置API",
-                "description": "为前端保存配置数据"
-            }
-        ]
-
-    @staticmethod
-    def get_render_mode() -> Tuple[str, Optional[str]]:
-        """
-        返回插件使用的前端渲染模式
-        :return: 前端渲染模式，前端文件目录
-        """
-        # 使用Vue模块联邦模式，参考联邦.md文档
-        return "vue", "dist/assets"  # Vue模块联邦模式
-        # return "vuetify", None  # 传统Vuetify JSON配置模式
+        return [{
+            "path": "/homepage",
+            "endpoint": self.homepage,
+            "methods": ["GET"],
+            "summary": "HomePage",
+            "description": "HomePage自定义api",
+        }]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """获取配置表单 - 支持Vuetify和Vue模式"""
-        # 检查渲染模式
-        render_mode, _ = self.get_render_mode()
-
-        if render_mode == "vue":
-            # Vue模式：返回None和配置数据
-            return None, self._get_vue_config()
-        else:
-            # Vuetify模式：返回组件配置
-            return self._get_vuetify_form()
-
-    def _get_vue_config(self) -> Dict[str, Any]:
-        """获取Vue模式的配置数据"""
-        return {
-            "enabled": self._enabled,
-            "source_path": self._source_path,
-            "target_path": self._target_path,
-            "sync_type": self._sync_type.value if hasattr(self._sync_type, 'value') else str(self._sync_type),
-            "execution_mode": self._execution_mode.value if hasattr(self._execution_mode, 'value') else str(self._execution_mode),
-            "delay_minutes": self._delay_minutes,
-            "enable_notifications": self._enable_notifications,
-            "notification_channel": self._notification_channel,
-            "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
-            "max_depth": self._max_depth,
-            "file_filters": ",".join(self._file_filters),
-            "exclude_patterns": ",".join(self._exclude_patterns),
-            "max_workers": self._max_workers,
-            "trigger_events": [event.value if hasattr(event, 'value') else str(event) for event in self._trigger_events]
-        }
-
-    def _get_vuetify_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """获取Vuetify模式的表单配置 - 简化版本"""
+        """
+        拼装插件配置页面，需要返回两块数据：1、页面配置；2、数据结构
+        """
+        # 编历 NotificationType 枚举，生成消息类型选项
+        MsgTypeOptions = []
+        for item in NotificationType:
+            MsgTypeOptions.append({
+                "title": item.value,
+                "value": item.name
+            })
         return [
             {
                 'component': 'VForm',
                 'content': [
-                    # 说明信息
-                    {
-                        'component': 'VAlert',
-                        'props': {
-                            'type': 'info',
-                            'variant': 'tonal',
-                            'text': '整理后同步插件 - 支持增量和全量同步策略，监听多种事件类型自动同步文件'
-                        }
-                    },
-                    # 基础开关
                     {
                         'component': 'VRow',
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
                                 'content': [
                                     {
                                         'component': 'VSwitch',
                                         'props': {
                                             'model': 'enabled',
-                                            'label': '启用插件'
+                                            'label': '启用插件',
                                         }
                                     }
                                 ]
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
                                 'content': [
                                     {
                                         'component': 'VSwitch',
                                         'props': {
-                                            'model': 'enable_notifications',
-                                            'label': '启用通知'
+                                            'model': 'notify',
+                                            'label': '开启通知',
                                         }
                                     }
                                 ]
-                            }
-                        ]
-                    },
-                    # 同步路径配置
-                    {
-                        'component': 'VRow',
-                        'content': [
+                            },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VSwitch',
                                         'props': {
-                                            'model': 'source_path',
-                                            'label': '源路径',
-                                            'placeholder': '请输入源路径，例如：/downloads'
+                                            'model': 'cd2_restart',
+                                            'label': 'cd2重启一次',
                                         }
                                     }
                                 ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
+                            },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VSwitch',
                                         'props': {
-                                            'model': 'target_path',
-                                            'label': '目标路径',
-                                            'placeholder': '请输入目标路径，例如：/media'
+                                            'model': 'onlyonce',
+                                            'label': '立即运行一次',
                                         }
                                     }
                                 ]
@@ -405,695 +623,1514 @@ class TransferSync(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12},
+                                'props': {
+                                    'cols': 12,
+                                },
                                 'content': [
                                     {
                                         'component': 'VTextarea',
                                         'props': {
-                                            'model': 'sync_paths',
-                                            'label': '同步路径列表',
-                                            'placeholder': '源路径1->目标路径1\n源路径2->目标路径2',
-                                            'hint': '每行一组路径配置，格式：源路径->目标路径',
-                                            'rows': 3
+                                            'model': 'cd2_confs',
+                                            'label': 'cd2配置',
+                                            'rows': 2,
+                                            'placeholder': 'cd2配置1#http://127.0.0.1:19798#admin#123456（一行一个配置）'
                                         }
                                     }
                                 ]
                             }
                         ]
                     },
-                    # 同步策略配置 - 按要求改为增量/全量同步策略
                     {
                         'component': 'VRow',
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
                                 'content': [
                                     {
-                                        'component': 'VSelect',
+                                        'component': 'VCronField',
                                         'props': {
-                                            'model': 'sync_type',
-                                            'label': '同步类型',
-                                            'items': [
-                                                {'title': '增量同步', 'value': 'incremental'},
-                                                {'title': '全量同步', 'value': 'full'}
-                                            ],
-                                            'hint': '选择增量同步或全量同步策略'
+                                            'model': 'cron',
+                                            'label': '检测周期',
+                                            'placeholder': '5位cron表达式'
                                         }
                                     }
                                 ]
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [
-                                    {
-                                        'component': 'VSelect',
-                                        'props': {
-                                            'model': 'execution_mode',
-                                            'label': '执行模式',
-                                            'items': [
-                                                {'title': '立即执行', 'value': 'immediate'},
-                                                {'title': '延迟执行', 'value': 'delayed'}
-                                            ],
-                                            'hint': '选择立即还是延迟执行'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
                                 'content': [
                                     {
                                         'component': 'VTextField',
                                         'props': {
-                                            'model': 'delay_minutes',
-                                            'label': '延迟时间（分钟）',
-                                            'type': 'number',
-                                            'hint': '延迟执行的等待时间',
-                                            'show': '{{ execution_mode === "delayed" }}'
+                                            'model': 'keyword',
+                                            'label': '检测关键字'
                                         }
                                     }
                                 ]
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
                                 'content': [
                                     {
                                         'component': 'VSelect',
                                         'props': {
-                                            'model': 'sync_strategy',
-                                            'label': '文件操作',
-                                            'items': [
-                                                {'title': '复制文件', 'value': 'copy'},
-                                                {'title': '移动文件', 'value': 'move'},
-                                                {'title': '软链接', 'value': 'softlink'},
-                                                {'title': '硬链接', 'value': 'hardlink'}
-                                            ],
-                                            'hint': '选择文件操作方式'
+                                            'multiple': False,
+                                            'chips': True,
+                                            'model': 'msgtype',
+                                            'label': '消息类型',
+                                            'items': MsgTypeOptions
                                         }
                                     }
                                 ]
                             }
                         ]
                     },
-                    # 触发事件配置
                     {
                         'component': 'VRow',
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
                                 'content': [
                                     {
-                                        'component': 'VSelect',
+                                        'component': 'VTextField',
                                         'props': {
-                                            'model': 'trigger_events',
-                                            'label': '触发事件',
-                                            'items': [
-                                                {'title': '整理完成', 'value': 'transfer.complete'},
-                                                {'title': '下载添加', 'value': 'download.added'},
-                                                {'title': '订阅完成', 'value': 'subscribe.complete'},
-                                                {'title': '媒体添加', 'value': 'media.added'},
-                                                {'title': '文件移动', 'value': 'file.moved'},
-                                                {'title': '目录扫描完成', 'value': 'directory.scan.complete'},
-                                                {'title': '刮削完成', 'value': 'scrape.complete'},
-                                                {'title': '插件触发', 'value': 'plugin.triggered'}
-                                            ],
-                                            'multiple': True,
-                                            'hint': '选择触发同步的事件类型'
+                                            'model': 'black_dir',
+                                            'label': 'cd2黑名单目录',
+                                            'placeholder': 'cd2上添加的本地目录(多个目录用英文逗号分隔)'
                                         }
                                     }
                                 ]
-                            }
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'cloud_path',
+                                            'label': '云下载路径'
+                                        }
+                                    }
+                                ]
+                            },
                         ]
                     },
-                    # 文件过滤
                     {
                         'component': 'VRow',
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VAlert',
                                         'props': {
-                                            'model': 'file_filters',
-                                            'label': '文件类型过滤',
-                                            'placeholder': 'mp4,mkv,avi,mov',
-                                            'hint': '只同步指定类型的文件，用逗号分隔'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'exclude_patterns',
-                                            'label': '排除模式',
-                                            'placeholder': 'temp,cache,@eaDir',
-                                            'hint': '排除包含这些字符的文件/目录'
+                                            'type': 'info',
+                                            'variant': 'tonal',
+                                            'text': '周期检测CloudDrive2上传任务，检测是否命中检测关键词，发送通知。'
                                         }
                                     }
                                 ]
                             }
                         ]
                     },
-                    # 高级设置
                     {
                         'component': 'VRow',
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VAlert',
                                         'props': {
-                                            'model': 'max_depth',
-                                            'label': '最大目录深度',
-                                            'type': 'number',
-                                            'hint': '限制同步的目录深度，-1表示无限制'
+                                            'type': 'info',
+                                            'variant': 'tonal',
+                                            'text': '周期检测CloudDrive2云盘CK是否过期，发送通知（挂载的本地路径可添加黑名单）。'
                                         }
                                     }
                                 ]
-                            },
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {
+                                    'cols': 12,
+                                },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VAlert',
                                         'props': {
-                                            'model': 'max_workers',
-                                            'label': '并发线程数',
-                                            'type': 'number',
-                                            'hint': '同时进行同步的线程数量'
-                                        }
+                                            'type': 'success',
+                                            'variant': 'tonal'
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'span',
+                                                'text': 'HomePage配置教程请参考：'
+                                            },
+                                            {
+                                                'component': 'a',
+                                                'props': {
+                                                    'href': 'https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/docs/Cd2Assistant.md',
+                                                    'target': '_blank'
+                                                },
+                                                'text': 'https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/docs/Cd2Assistant.md'
+                                            }
+                                        ]
                                     }
                                 ]
                             }
                         ]
                     },
-                ]
-            }
-        ], {
-            "enabled": self._enabled,
-            "source_path": self._source_path,
-            "target_path": self._target_path,
-            "sync_type": self._sync_type.value if hasattr(self._sync_type, 'value') else str(self._sync_type),
-            "execution_mode": self._execution_mode.value if hasattr(self._execution_mode, 'value') else str(self._execution_mode),
-            "delay_minutes": self._delay_minutes,
-            "enable_notifications": self._enable_notifications,
-            "notification_channel": self._notification_channel,
-            "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
-            "max_depth": self._max_depth,
-            "file_filters": ",".join(self._file_filters),
-            "exclude_patterns": ",".join(self._exclude_patterns),
-            "max_workers": self._max_workers,
-            "trigger_events": [event.value if hasattr(event, 'value') else str(event) for event in self._trigger_events]
-        }
-
-    # API 端点方法
-    def sync_status(self) -> Dict[str, Any]:
-        """获取同步状态API - 简化版本"""
-        try:
-            status = {
-                "enabled": self._enabled,
-                "sync_paths_count": 1 if self._source_path and self._target_path else 0,
-                "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
-                "sync_type": self._sync_type.value if hasattr(self._sync_type, 'value') else str(self._sync_type),
-                "execution_mode": self._execution_mode.value if hasattr(self._execution_mode, 'value') else str(self._execution_mode),
-                "delay_minutes": self._delay_minutes,
-                "source_path": self._source_path,
-                "target_path": self._target_path,
-                "notification_channel": self._notification_channel
-            }
-
-            # 如果使用高级功能，添加更多状态信息
-            if self._use_advanced_features and self._event_manager:
-                try:
-                    status["event_statistics"] = self._event_manager.get_event_statistics()
-                    status["pending_syncs"] = self._event_manager.get_pending_syncs()
-                except Exception:
-                    pass
-
-            return status
-        except Exception as e:
-            logger.error(f"获取同步状态失败: {str(e)}")
-            return {"error": str(e)}
-
-    def manual_sync(self) -> Dict[str, Any]:
-        """手动触发同步API"""
-        try:
-            if not self._enabled:
-                return {"error": "插件未启用"}
-
-            if not self._source_path or not self._target_path:
-                return {"error": "未配置源路径或目标路径"}
-
-            # 触发手动同步
-            if self._sync_ops:
-                sync_config = {"source": self._source_path, "target": self._target_path}
-                self._sync_ops.execute_sync(sync_config, self._source_path)
-
-            return {
-                "success": True,
-                "message": f"已触发从 {self._source_path} 到 {self._target_path} 的同步任务"
-            }
-        except Exception as e:
-            logger.error(f"手动触发同步失败: {str(e)}")
-            return {"error": str(e)}
-
-
-    def incremental_sync(self) -> Dict[str, Any]:
-        """增量同步API"""
-        try:
-            if not self._enabled:
-                return {"error": "插件未启用"}
-
-            if not self._source_path or not self._target_path:
-                return {"error": "未配置源路径或目标路径"}
-
-            # 执行增量同步（这里可以添加时间戳比较逻辑）
-            total_files = 0
-            if self._sync_ops:
-                sync_config = {"source": self._source_path, "target": self._target_path}
-                result = self._sync_ops.execute_sync(sync_config, self._source_path)
-                total_files = result.get('synced_files', 0)
-
-            return {
-                "success": True,
-                "message": f"增量同步完成，从 {self._source_path} 到 {self._target_path}，同步了 {total_files} 个文件"
-            }
-        except Exception as e:
-            logger.error(f"增量同步失败: {str(e)}")
-            return {"error": str(e)}
-
-    def test_paths(self) -> Dict[str, Any]:
-        """测试路径API"""
-        try:
-            if not self._source_path or not self._target_path:
-                return {"error": "未配置源路径或目标路径"}
-
-            results = []
-            source = self._source_path
-            target = self._target_path
-
-            test_result = {
-                "index": 1,
-                "source": source,
-                "target": target,
-                "source_status": "unknown",
-                "target_status": "unknown",
-                "permissions": "unknown"
-            }
-
-            # 测试源路径
-            try:
-                from pathlib import Path
-                source_path = Path(source)
-                if source_path.exists():
-                    if source_path.is_dir():
-                        test_result["source_status"] = "ok"
-                    else:
-                        test_result["source_status"] = "not_directory"
-                else:
-                    test_result["source_status"] = "not_found"
-            except Exception as e:
-                test_result["source_status"] = f"error: {str(e)}"
-
-            # 测试目标路径
-            try:
-                target_path = Path(target)
-                if target_path.parent.exists():
-                    if target_path.exists() and target_path.is_dir():
-                        test_result["target_status"] = "ok"
-                    elif not target_path.exists():
-                        test_result["target_status"] = "parent_ok"
-                    else:
-                        test_result["target_status"] = "not_directory"
-                else:
-                    test_result["target_status"] = "parent_not_found"
-            except Exception as e:
-                test_result["target_status"] = f"error: {str(e)}"
-
-            # 测试权限
-            try:
-                import os
-                if source_path.exists() and os.access(source, os.R_OK):
-                    if target_path.parent.exists() and os.access(target_path.parent, os.W_OK):
-                        test_result["permissions"] = "ok"
-                    else:
-                        test_result["permissions"] = "target_no_write"
-                else:
-                    test_result["permissions"] = "source_no_read"
-            except Exception as e:
-                test_result["permissions"] = f"error: {str(e)}"
-
-            results.append(test_result)
-
-            return {
-                "success": True,
-                "results": results
-            }
-        except Exception as e:
-            logger.error(f"测试路径失败: {str(e)}")
-            return {"error": str(e)}
-
-    def browse_files(self, path: str = "/") -> Dict[str, Any]:
-        """文件浏览API - 用于路径选择"""
-        try:
-            import os
-            from pathlib import Path
-
-            # 验证路径安全性
-            if not path or path == "/":
-                path = os.path.expanduser("~")  # 默认从用户主目录开始
-
-            path_obj = Path(path)
-            if not path_obj.exists() or not path_obj.is_dir():
-                return {"error": "路径不存在或不是目录"}
-
-            # 获取目录内容
-            items = []
-            try:
-                # 添加父目录项
-                if str(path_obj) != str(path_obj.root):
-                    items.append({
-                        "name": "..",
-                        "path": str(path_obj.parent),
-                        "type": "dir",
-                        "size": 0,
-                        "is_parent": True
-                    })
-
-                # 列出目录内容
-                for item in sorted(path_obj.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
-                    try:
-                        stat = item.stat()
-                        items.append({
-                            "name": item.name,
-                            "path": str(item),
-                            "type": "dir" if item.is_dir() else "file",
-                            "size": stat.st_size if item.is_file() else 0,
-                            "mtime": stat.st_mtime,
-                            "is_parent": False
-                        })
-                    except (OSError, PermissionError):
-                        # 跳过无权限访问的文件/目录
-                        continue
-
-            except PermissionError:
-                return {"error": "无权限访问该目录"}
-
-            return {
-                "success": True,
-                "current_path": str(path_obj),
-                "items": items
-            }
-
-        except Exception as e:
-            logger.error(f"浏览文件失败: {str(e)}")
-            return {"error": str(e)}
-
-    def browse_path(self, path: str) -> Dict[str, Any]:
-        """浏览指定路径的API"""
-        return self.browse_files(path)
-
-    def get_config_api(self) -> Dict[str, Any]:
-        """获取配置API - 为Vue前端提供配置数据"""
-        try:
-            config_data = self._get_vue_config()
-            # 确保所有字段都有默认值
-            default_config = {
-                "enabled": False,
-                "source_path": "",
-                "target_path": "",
-                "sync_paths": "",
-                "sync_type": "incremental",
-                "execution_mode": "immediate",
-                "delay_minutes": 5,
-                "enable_notifications": False,
-                "sync_strategy": "copy",
-                "max_depth": -1,
-                "file_filters": "",
-                "exclude_patterns": "",
-                "max_workers": 4,
-                "trigger_events": ["transfer.complete"]
-            }
-            default_config.update(config_data)
-            return {
-                "success": True,
-                "data": default_config
-            }
-        except Exception as e:
-            logger.error(f"获取配置API失败: {str(e)}")
-            return {"success": False, "error": str(e)}
-
-    def save_config_api(self, config_data: Dict[str, Any] = None) -> Dict[str, Any]:
-        """保存配置API - 为前端保存配置"""
-        try:
-            if config_data:
-                # 这里可以实现配置保存逻辑
-                # 通常会调用 MoviePilot 的配置保存接口
-                logger.info(f"前端配置保存请求已接收: {list(config_data.keys())}")
-            return {
-                "success": True,
-                "message": "配置保存成功",
-                "data": config_data or {}
-            }
-        except Exception as e:
-            logger.error(f"保存配置API失败: {str(e)}")
-            return {"success": False, "error": str(e)}
-
-    def get_page(self) -> List[dict]:
-        """获取插件页面"""
-        return [
-            {
-                'component': 'div',
-                'text': '整理后同步插件',
-                'props': {'class': 'text-center'}
-            },
-            {
-                'component': 'VCard',
-                'content': [
                     {
-                        'component': 'VCardTitle',
-                        'props': {'class': 'pe-2'},
+                        'component': 'VRow',
                         'content': [
                             {
-                                'component': 'VIcon',
-                                'props': {'icon': 'mdi-sync', 'class': 'me-2'}
-                            },
-                            {
-                                'component': 'span',
-                                'text': '同步状态'
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VCardText',
-                        'content': [
-                            {
-                                'component': 'div',
-                                'text': f'插件状态: {"启用" if self._enabled else "禁用"}',
-                                'props': {'class': 'mb-2'}
-                            },
-                            {
-                                'component': 'div',
-                                'text': f'配置的同步路径数量: {1 if self._source_path and self._target_path else 0}',
-                                'props': {'class': 'mb-2'}
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'type': 'info',
+                                            'variant': 'tonal',
+                                            'text': '如安装完启用插件后，HomePage提示404，重启MoviePilot即可。'
+                                        }
+                                    }
+                                ]
                             }
                         ]
                     }
                 ]
             }
-        ]
+        ], {
+            "enabled": False,
+            "notify": False,
+            "onlyonce": False,
+            "cd2_restart": False,
+            "cron": "*/10 * * * *",
+            "keyword": "账号异常",
+            "cd2_confs": "",
+            "msgtype": "Manual",
+            "black_dir": "",
+            "cloud_path": "",
+        }
 
-    # 兼容模式方法
-    def _apply_config_compatible(self, config: Dict[str, Any]):
-        """兼容模式的配置应用 - 简化版本"""
-        self._enabled = config.get("enabled", False)
+    def get_page(self) -> List[dict]:
+        page_form = []
+        for cd2_name, client in self._clients.items():
+            cd2_client = self._cd2_clients[cd2_name]
+            cd2_url = self._cd2_url[cd2_name]
+            cd2_info = self.__get_cd2_info(client=client, cd2_client=cd2_client)
+            page_form.append({
+                'component': 'VRow',
+                'content': [
+                    {
+                        'component': 'VCol',
+                        'props': {
+                            'cols': 12,
+                            'md': 4,
+                            'sm': 6
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'variant': 'tonal',
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {
+                                            'class': 'd-flex align-center',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-h6'
+                                                        },
+                                                        'text': cd2_name
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center flex-wrap'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'a',
+                                                                'props': {
+                                                                    'class': 'text-caption',
+                                                                    'href': cd2_url,
+                                                                    'target': '_blank',
+                                                                },
+                                                                'text': cd2_url
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                        ]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {
+                            'cols': 12,
+                            'md': 4,
+                            'sm': 6
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'variant': 'tonal',
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {
+                                            'class': 'd-flex align-center',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-caption'
+                                                        },
+                                                        'text': 'CPU占用'
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center flex-wrap'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': cd2_info.get('cpuUsage')
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                        ]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {
+                            'cols': 12,
+                            'md': 4,
+                            'sm': 6
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'variant': 'tonal',
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {
+                                            'class': 'd-flex align-center',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-caption'
+                                                        },
+                                                        'text': '内存占用'
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center flex-wrap'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': cd2_info.get('memUsageKB')
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                        ]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {
+                            'cols': 12,
+                            'md': 4,
+                            'sm': 6
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'variant': 'tonal',
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {
+                                            'class': 'd-flex align-center',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-caption'
+                                                        },
+                                                        'text': '运行时间'
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center flex-wrap'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': cd2_info.get('uptime')
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                        ]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {
+                            'cols': 12,
+                            'md': 4,
+                            'sm': 6
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'variant': 'tonal',
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {
+                                            'class': 'd-flex align-center',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-caption'
+                                                        },
+                                                        'text': '打开文件数'
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center flex-wrap'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': cd2_info.get('fhTableCount')
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                        ]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {
+                            'cols': 12,
+                            'md': 4,
+                            'sm': 6
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'variant': 'tonal',
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {
+                                            'class': 'd-flex align-center',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-caption'
+                                                        },
+                                                        'text': '缓存目录数'
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center flex-wrap'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': cd2_info.get('dirCacheCount')
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                        ]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {
+                            'cols': 12,
+                            'md': 4,
+                            'sm': 6
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'variant': 'tonal',
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {
+                                            'class': 'd-flex align-center',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-caption'
+                                                        },
+                                                        'text': '临时文件数'
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center flex-wrap'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': cd2_info.get('tempFileCount')
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {
+                            'cols': 12,
+                            'md': 4,
+                            'sm': 6
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'variant': 'tonal',
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {
+                                            'class': 'd-flex align-center',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-caption'
+                                                        },
+                                                        'text': '下载任务数'
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center flex-wrap'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': cd2_info.get('download_count')
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {
+                            'cols': 12,
+                            'md': 4,
+                            'sm': 6
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'variant': 'tonal',
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {
+                                            'class': 'd-flex align-center',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-caption'
+                                                        },
+                                                        'text': '上传任务数'
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center flex-wrap'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': cd2_info.get('upload_count')
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {
+                            'cols': 12,
+                            'md': 4,
+                            'sm': 6
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'variant': 'tonal',
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {
+                                            'class': 'd-flex align-center',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-caption'
+                                                        },
+                                                        'text': '实时速率'
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center flex-wrap'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': f"↑ {cd2_info.get('download_speed')}  ↓ {cd2_info.get('upload_speed')}"
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {
+                            'cols': 12,
+                            'md': 4,
+                            'sm': 6
+                        },
+                        'content': [
+                            {
+                                'component': 'VCard',
+                                'props': {
+                                    'variant': 'tonal',
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCardText',
+                                        'props': {
+                                            'class': 'd-flex align-center',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-caption'
+                                                        },
+                                                        'text': '存储空间'
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center flex-wrap'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': cd2_info.get('cloud_space')
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }, )
+        return page_form
 
-        # 解析同步路径（兼容模式）
-        sync_paths_str = config.get("sync_paths", "")
-        if sync_paths_str:
-            # 解析第一个路径作为主路径
-            sync_paths = self._parse_sync_paths_compatible(sync_paths_str)
-            if sync_paths:
-                self._source_path = sync_paths[0].get("source", "")
-                self._target_path = sync_paths[0].get("target", "")
-            else:
-                self._source_path = ""
-                self._target_path = ""
+    def get_dashboard(self) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], List[dict]]]:
+        """
+        获取插件仪表盘页面，需要返回：1、仪表板col配置字典；2、全局配置（自动刷新等）；3、仪表板页面元素配置json（含数据）
+        1、col配置参考：
+        {
+            "cols": 12, "md": 6
+        }
+        2、全局配置参考：
+        {
+            "refresh": 10 // 自动刷新时间，单位秒
+        }
+        3、页面配置使用Vuetify组件拼装，参考：https://vuetifyjs.com/
+        """
+        # 列配置
+        cols = {
+            "cols": 12,
+            "md": 12
+        }
+        # 全局配置
+        attrs = {
+            "refresh": 10, "border": False
+        }
+        if not self._clients:
+            logger.warn(f"请求CloudDrive2服务失败")
+            elements = [
+                {
+                    'component': 'div',
+                    'text': '无法连接CloudDrive2',
+                    'props': {
+                        'class': 'text-center',
+                    }
+                }
+            ]
         else:
-            # 向后兼容旧版本配置
-            self._source_path = config.get("sync_root_path", "")
-            self._target_path = config.get("sync_target_path", "")
+            elements = []
+            for cd2_name, client in self._clients.items():
+                cd2_client = self._cd2_clients[cd2_name]
+                cd2_url = self._cd2_url[cd2_name]
+                cd2_info = self.__get_cd2_info(client=client, cd2_client=cd2_client)
 
-        self._delay_minutes = config.get("delay_minutes", 5)
-        self._enable_notifications = config.get("enable_notifications", False)
+                elements.append(
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': cd2_name
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'a',
+                                                                        'props': {
+                                                                            'class': 'text-caption',
+                                                                            'href': cd2_url,
+                                                                            'target': '_blank',
+                                                                        },
+                                                                        'text': cd2_url
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-h6'
+                                                                },
+                                                                'text': 'CPU占用'
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'props': {
+                                                                            'class': 'text-h6'
+                                                                        },
+                                                                        'text': cd2_info.get('cpuUsage')
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '内存占用'
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'props': {
+                                                                            'class': 'text-h6'
+                                                                        },
+                                                                        'text': cd2_info.get('memUsageKB')
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '运行时间'
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'props': {
+                                                                            'class': 'text-h6'
+                                                                        },
+                                                                        'text': cd2_info.get('uptime')
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '存储空间'
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'props': {
+                                                                            'class': 'text-h6'
+                                                                        },
+                                                                        'text': cd2_info.get('cloud_space')
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '打开文件数'
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'props': {
+                                                                            'class': 'text-h6'
+                                                                        },
+                                                                        'text': cd2_info.get('fhTableCount')
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
 
-        # 解析枚举值
-        try:
-            self._sync_strategy = SyncStrategy(config.get("sync_strategy", "copy"))
-        except ValueError:
-            self._sync_strategy = SyncStrategy.COPY
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '临时文件数'
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'props': {
+                                                                            'class': 'text-h6'
+                                                                        },
+                                                                        'text': cd2_info.get('tempFileCount')
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '下载任务数'
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'props': {
+                                                                            'class': 'text-h6'
+                                                                        },
+                                                                        'text': cd2_info.get('download_count')
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '上传任务数'
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'props': {
+                                                                            'class': 'text-h6'
+                                                                        },
+                                                                        'text': cd2_info.get('upload_count')
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '缓存目录数'
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'props': {
+                                                                            'class': 'text-h6'
+                                                                        },
+                                                                        'text': cd2_info.get('dirCacheCount')
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '下载速率'
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'props': {
+                                                                            'class': 'text-h6'
+                                                                        },
+                                                                        'text': cd2_info.get('download_speed')
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 6,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
+                                            'variant': 'tonal',
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardText',
+                                                'props': {
+                                                    'class': 'd-flex align-center',
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '上传速率'
+                                                            },
+                                                            {
+                                                                'component': 'div',
+                                                                'props': {
+                                                                    'class': 'd-flex align-center flex-wrap'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'props': {
+                                                                            'class': 'text-h6'
+                                                                        },
+                                                                        'text': cd2_info.get('upload_speed')
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                ]
+                            },
 
-        try:
-            self._sync_type = SyncType(config.get("sync_type", "incremental"))
-        except ValueError:
-            self._sync_type = SyncType.INCREMENTAL
+                        ]
+                    })
 
-        try:
-            self._execution_mode = ExecutionMode(config.get("execution_mode", "immediate"))
-        except ValueError:
-            self._execution_mode = ExecutionMode.IMMEDIATE
-
-        self._max_depth = config.get("max_depth", -1)
-        self._file_filters = self._parse_list_compatible(config.get("file_filters", ""))
-        self._exclude_patterns = self._parse_list_compatible(config.get("exclude_patterns", ""))
-        self._max_workers = config.get("max_workers", 4)
-
-        # 解析触发事件
-        trigger_events_config = config.get("trigger_events", [])
-        if isinstance(trigger_events_config, list):
-            self._trigger_events = [TriggerEvent(val) for val in trigger_events_config if self._is_valid_event_compatible(val)]
-        elif isinstance(trigger_events_config, str) and trigger_events_config:
-            event_values = self._parse_list_compatible(trigger_events_config)
-            self._trigger_events = [TriggerEvent(val) for val in event_values if self._is_valid_event_compatible(val)]
-        else:
-            self._trigger_events = [TriggerEvent.TRANSFER_COMPLETE]
-
-    def _parse_sync_paths_compatible(self, sync_paths_str: str) -> List[Dict[str, str]]:
-        """兼容模式的同步路径解析"""
-        sync_paths = []
-        if not sync_paths_str:
-            return sync_paths
-
-        try:
-            for path_pair in sync_paths_str.split(','):
-                path_pair = path_pair.strip()
-                if not path_pair:
-                    continue
-
-                # 支持两种分隔符
-                if '->' in path_pair:
-                    parts = path_pair.split('->', 1)
-                elif '::' in path_pair:
-                    parts = path_pair.split('::', 1)
-                else:
-                    logger.warning(f"无效的路径配置格式: {path_pair}")
-                    continue
-
-                if len(parts) == 2:
-                    source = parts[0].strip()
-                    target = parts[1].strip()
-
-                    if source and target:
-                        sync_paths.append({
-                            "source": source,
-                            "target": target
-                        })
-                    else:
-                        logger.warning(f"源路径或目标路径为空: {path_pair}")
-                else:
-                    logger.warning(f"无效的路径配置: {path_pair}")
-
-        except Exception as e:
-            logger.error(f"解析同步路径配置失败: {str(e)}")
-
-        return sync_paths
-
-    def _parse_list_compatible(self, list_str: str, separator: str = ',') -> List[str]:
-        """兼容模式的列表解析"""
-        if not list_str:
-            return []
-        return [item.strip() for item in list_str.split(separator) if item.strip()]
-
-    def _is_valid_event_compatible(self, event_value: str) -> bool:
-        """兼容模式的事件验证"""
-        if not event_value:
-            return False
-        try:
-            TriggerEvent(event_value)
-            return True
-        except ValueError:
-            return False
-
-    def _register_event_listeners_compatible(self):
-        """兼容模式的事件监听器注册"""
-        try:
-            from app.core.event import eventmanager, EventType
-
-            for trigger_event in self._trigger_events:
-                if trigger_event == TriggerEvent.TRANSFER_COMPLETE:
-                    eventmanager.register(EventType.TransferComplete, self._on_transfer_complete_compatible)
-                elif trigger_event == TriggerEvent.DOWNLOAD_ADDED:
-                    eventmanager.register(EventType.DownloadAdded, self._on_download_added_compatible)
-                # 可以继续添加其他事件类型
-
-            logger.info(f"兼容模式：已注册 {len(self._trigger_events)} 个事件监听器")
-        except Exception as e:
-            logger.error(f"兼容模式：注册事件监听器失败: {str(e)}")
-
-    def _on_transfer_complete_compatible(self, event):
-        """兼容模式的整理完成事件处理"""
-        try:
-            # 简化的事件处理逻辑
-            if hasattr(event, 'event_data') and event.event_data:
-                event_data = event.event_data
-                # 尝试提取路径
-                path = None
-                if isinstance(event_data, dict):
-                    path = event_data.get('path') or event_data.get('src') or event_data.get('filepath')
-                elif hasattr(event_data, 'path'):
-                    path = str(event_data.path)
-
-                if path and self._sync_ops:
-                    # 使用现有的同步逻辑
-                    self._sync_ops.sync_directory(path)
-        except Exception as e:
-            logger.error(f"兼容模式：处理整理完成事件失败: {str(e)}")
-
-    def _on_download_added_compatible(self, event):
-        """兼容模式的下载添加事件处理"""
-        try:
-            # 简化的事件处理逻辑，类似于 transfer_complete
-            self._on_transfer_complete_compatible(event)
-        except Exception as e:
-            logger.error(f"兼容模式：处理下载添加事件失败: {str(e)}")
-
-    def get_service(self) -> List[Dict[str, Any]]:
-        """获取插件服务 - 暂不提供定时服务"""
-        # 移除定时任务，通过事件触发和手动同步执行
-        return []
+        return cols, attrs, elements
 
     def stop_service(self):
-        """停止服务"""
+        """
+        退出插件
+        """
         try:
-            if self._use_advanced_features and self._event_manager:
-                # 取消事件监听
-                self._event_manager.unregister_event_listeners()
-                # 清理服务管理器
-                self._service_manager.shutdown()
-            else:
-                # 兼容模式清理
-                try:
-                    from app.core.event import eventmanager, EventType
-                    # 这里应该取消注册，但为了简化暂时跳过
-                    pass
-                except Exception:
-                    pass
-
-            logger.info("TransferSync服务已停止")
+            if self._scheduler:
+                self._scheduler.remove_all_jobs()
+                if self._scheduler.running:
+                    self._scheduler.shutdown()
+                self._scheduler = None
         except Exception as e:
-            logger.error(f"停止TransferSync服务失败: {str(e)}")
+            logger.error("退出插件失败：%s" % str(e))
