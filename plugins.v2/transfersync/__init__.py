@@ -634,19 +634,17 @@ class TransferSync(_PluginBase):
             if not self._enabled:
                 return {"error": "插件未启用"}
 
-            if not self._sync_paths:
-                return {"error": "未配置同步路径"}
+            if not self._source_path or not self._target_path:
+                return {"error": "未配置源路径或目标路径"}
 
             # 触发手动同步
-            sync_count = 0
-            for sync_config in self._sync_paths:
-                if self._sync_ops:
-                    self._sync_ops.execute_sync(sync_config, sync_config['source'])
-                    sync_count += 1
+            if self._sync_ops:
+                sync_config = {"source": self._source_path, "target": self._target_path}
+                self._sync_ops.execute_sync(sync_config, self._source_path)
 
             return {
                 "success": True,
-                "message": f"已触发 {sync_count} 个同步任务"
+                "message": f"已触发从 {self._source_path} 到 {self._target_path} 的同步任务"
             }
         except Exception as e:
             logger.error(f"手动触发同步失败: {str(e)}")
@@ -659,21 +657,19 @@ class TransferSync(_PluginBase):
             if not self._enabled:
                 return {"error": "插件未启用"}
 
-            if not self._sync_paths:
-                return {"error": "未配置同步路径"}
+            if not self._source_path or not self._target_path:
+                return {"error": "未配置源路径或目标路径"}
 
             # 执行增量同步（这里可以添加时间戳比较逻辑）
-            sync_count = 0
             total_files = 0
-            for sync_config in self._sync_paths:
-                if self._sync_ops:
-                    result = self._sync_ops.execute_sync(sync_config, sync_config['source'])
-                    sync_count += 1
-                    total_files += result.get('synced_files', 0)
+            if self._sync_ops:
+                sync_config = {"source": self._source_path, "target": self._target_path}
+                result = self._sync_ops.execute_sync(sync_config, self._source_path)
+                total_files = result.get('synced_files', 0)
 
             return {
                 "success": True,
-                "message": f"增量同步完成，处理了 {sync_count} 个路径，同步了 {total_files} 个文件"
+                "message": f"增量同步完成，从 {self._source_path} 到 {self._target_path}，同步了 {total_files} 个文件"
             }
         except Exception as e:
             logger.error(f"增量同步失败: {str(e)}")
@@ -682,66 +678,65 @@ class TransferSync(_PluginBase):
     def test_paths(self) -> Dict[str, Any]:
         """测试路径API"""
         try:
-            if not self._sync_paths:
-                return {"error": "未配置同步路径"}
+            if not self._source_path or not self._target_path:
+                return {"error": "未配置源路径或目标路径"}
 
             results = []
-            for i, sync_config in enumerate(self._sync_paths):
-                source = sync_config.get('source', '')
-                target = sync_config.get('target', '')
+            source = self._source_path
+            target = self._target_path
 
-                test_result = {
-                    "index": i + 1,
-                    "source": source,
-                    "target": target,
-                    "source_status": "unknown",
-                    "target_status": "unknown",
-                    "permissions": "unknown"
-                }
+            test_result = {
+                "index": 1,
+                "source": source,
+                "target": target,
+                "source_status": "unknown",
+                "target_status": "unknown",
+                "permissions": "unknown"
+            }
 
-                # 测试源路径
-                try:
-                    from pathlib import Path
-                    source_path = Path(source)
-                    if source_path.exists():
-                        if source_path.is_dir():
-                            test_result["source_status"] = "ok"
-                        else:
-                            test_result["source_status"] = "not_directory"
+            # 测试源路径
+            try:
+                from pathlib import Path
+                source_path = Path(source)
+                if source_path.exists():
+                    if source_path.is_dir():
+                        test_result["source_status"] = "ok"
                     else:
-                        test_result["source_status"] = "not_found"
-                except Exception as e:
-                    test_result["source_status"] = f"error: {str(e)}"
+                        test_result["source_status"] = "not_directory"
+                else:
+                    test_result["source_status"] = "not_found"
+            except Exception as e:
+                test_result["source_status"] = f"error: {str(e)}"
 
-                # 测试目标路径
-                try:
-                    target_path = Path(target)
-                    if target_path.parent.exists():
-                        if target_path.exists() and target_path.is_dir():
-                            test_result["target_status"] = "ok"
-                        elif not target_path.exists():
-                            test_result["target_status"] = "parent_ok"
-                        else:
-                            test_result["target_status"] = "not_directory"
+            # 测试目标路径
+            try:
+                target_path = Path(target)
+                if target_path.parent.exists():
+                    if target_path.exists() and target_path.is_dir():
+                        test_result["target_status"] = "ok"
+                    elif not target_path.exists():
+                        test_result["target_status"] = "parent_ok"
                     else:
-                        test_result["target_status"] = "parent_not_found"
-                except Exception as e:
-                    test_result["target_status"] = f"error: {str(e)}"
+                        test_result["target_status"] = "not_directory"
+                else:
+                    test_result["target_status"] = "parent_not_found"
+            except Exception as e:
+                test_result["target_status"] = f"error: {str(e)}"
 
-                # 测试权限
-                try:
-                    import os
-                    if source_path.exists() and os.access(source, os.R_OK):
-                        if target_path.parent.exists() and os.access(target_path.parent, os.W_OK):
-                            test_result["permissions"] = "ok"
-                        else:
-                            test_result["permissions"] = "target_no_write"
+            # 测试权限
+            try:
+                import os
+                if source_path.exists() and os.access(source, os.R_OK):
+                    if target_path.parent.exists() and os.access(target_path.parent, os.W_OK):
+                        test_result["permissions"] = "ok"
                     else:
-                        test_result["permissions"] = "source_no_read"
-                except Exception as e:
-                    test_result["permissions"] = f"error: {str(e)}"
+                        test_result["permissions"] = "target_no_write"
+                else:
+                    test_result["permissions"] = "source_no_read"
+            except Exception as e:
+                test_result["permissions"] = f"error: {str(e)}"
 
-                results.append(test_result)
+            results.append(test_result)
 
             return {
                 "success": True,
@@ -892,7 +887,7 @@ class TransferSync(_PluginBase):
                             },
                             {
                                 'component': 'div',
-                                'text': f'配置的同步路径数量: {len(self._sync_paths)}',
+                                'text': f'配置的同步路径数量: {1 if self._source_path and self._target_path else 0}',
                                 'props': {'class': 'mb-2'}
                             }
                         ]
@@ -909,15 +904,18 @@ class TransferSync(_PluginBase):
         # 解析同步路径（兼容模式）
         sync_paths_str = config.get("sync_paths", "")
         if sync_paths_str:
-            self._sync_paths = self._parse_sync_paths_compatible(sync_paths_str)
+            # 解析第一个路径作为主路径
+            sync_paths = self._parse_sync_paths_compatible(sync_paths_str)
+            if sync_paths:
+                self._source_path = sync_paths[0].get("source", "")
+                self._target_path = sync_paths[0].get("target", "")
+            else:
+                self._source_path = ""
+                self._target_path = ""
         else:
             # 向后兼容旧版本配置
-            root_path = config.get("sync_root_path", "")
-            target_path = config.get("sync_target_path", "")
-            if root_path and target_path:
-                self._sync_paths = [{"source": root_path, "target": target_path}]
-            else:
-                self._sync_paths = []
+            self._source_path = config.get("sync_root_path", "")
+            self._target_path = config.get("sync_target_path", "")
 
         self._delay_minutes = config.get("delay_minutes", 5)
         self._enable_notifications = config.get("enable_notifications", False)
