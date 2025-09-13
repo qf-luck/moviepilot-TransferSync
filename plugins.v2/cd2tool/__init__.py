@@ -38,7 +38,7 @@ class Cd2Tool(_PluginBase):
     # 作者主页
     author_url = "https://github.com/qf-luck/moviepilot-TransferSync"
     # 插件配置项ID前缀
-    plugin_config_prefix = "Cd2Tool_"
+    plugin_config_prefix = "cd2tool_"
     # 加载顺序
     plugin_order = 5
     # 可使用的用户级别
