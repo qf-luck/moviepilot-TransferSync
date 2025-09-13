@@ -158,13 +158,13 @@ class TransferSync(_PluginBase):
         # 初始化同步操作类
         self._sync_ops = SyncOperations(self)
 
-        # 初始化功能模块
-        self.api_handler = ApiHandler(self)
-        self.notification_manager = NotificationManager(self)
-        self.sync_scheduler = SyncScheduler(self)
-        self.command_handler = CommandHandler(self)
-        self.widget_manager = WidgetManager(self)
-        self.workflow_actions = WorkflowActions(self)
+        # 初始化功能模块（延迟初始化避免导入问题）
+        self._api_handler = None
+        self._notification_manager = None
+        self._sync_scheduler = None
+        self._command_handler = None
+        self._widget_manager = None
+        self._workflow_actions = None
 
         # 注册事件监听器
         if self._enabled:
@@ -173,6 +173,48 @@ class TransferSync(_PluginBase):
             self.sync_scheduler.setup_scheduler()
 
         logger.info("TransferSync插件初始化完成")
+
+    @property
+    def api_handler(self):
+        """延迟初始化API处理器"""
+        if self._api_handler is None:
+            self._api_handler = ApiHandler(self)
+        return self._api_handler
+
+    @property
+    def notification_manager(self):
+        """延迟初始化通知管理器"""
+        if self._notification_manager is None:
+            self._notification_manager = NotificationManager(self)
+        return self._notification_manager
+
+    @property
+    def sync_scheduler(self):
+        """延迟初始化同步调度器"""
+        if self._sync_scheduler is None:
+            self._sync_scheduler = SyncScheduler(self)
+        return self._sync_scheduler
+
+    @property
+    def command_handler(self):
+        """延迟初始化命令处理器"""
+        if self._command_handler is None:
+            self._command_handler = CommandHandler(self)
+        return self._command_handler
+
+    @property
+    def widget_manager(self):
+        """延迟初始化组件管理器"""
+        if self._widget_manager is None:
+            self._widget_manager = WidgetManager(self)
+        return self._widget_manager
+
+    @property
+    def workflow_actions(self):
+        """延迟初始化工作流动作"""
+        if self._workflow_actions is None:
+            self._workflow_actions = WorkflowActions(self)
+        return self._workflow_actions
 
     def _parse_paths(self, paths_str: str) -> List[str]:
         """解析路径字符串"""
@@ -219,8 +261,8 @@ class TransferSync(_PluginBase):
         """停止服务"""
         try:
             # 停止调度器
-            if hasattr(self, 'sync_scheduler'):
-                self.sync_scheduler.shutdown()
+            if self._sync_scheduler is not None:
+                self._sync_scheduler.shutdown()
             
             # 取消事件监听
             self._unregister_event_listeners()
@@ -475,20 +517,72 @@ class TransferSync(_PluginBase):
         """获取工作流动作"""
         return self.workflow_actions.get_actions()
 
+    def get_page(self) -> List[Dict[str, Any]]:
+        """获取插件页面"""
+        return [
+            {
+                "component": "div",
+                "text": "TransferSync - 整理后同步插件",
+                "props": {
+                    "class": "text-center"
+                }
+            },
+            {
+                "component": "VCard",
+                "props": {
+                    "variant": "tonal"
+                },
+                "content": [
+                    {
+                        "component": "VCardTitle",
+                        "props": {
+                            "class": "pe-2"
+                        },
+                        "text": "插件状态"
+                    },
+                    {
+                        "component": "VCardText",
+                        "text": f"当前状态: {'启用' if self._enabled else '禁用'}"
+                    },
+                    {
+                        "component": "VCardText", 
+                        "text": f"同步策略: {self._sync_strategy.value}"
+                    },
+                    {
+                        "component": "VCardText",
+                        "text": f"监听事件: {len(self._trigger_events)} 个"
+                    },
+                    {
+                        "component": "VCardText",
+                        "text": f"同步路径: {len(self._copy_paths)} 个"
+                    }
+                ]
+            }
+        ]
+
     # 兼容性方法
     def _incremental_sync_job(self):
         """增量同步任务"""
-        if hasattr(self, 'sync_scheduler'):
+        if self._sync_scheduler is not None:
+            self._sync_scheduler._incremental_sync_job()
+        else:
+            # 如果调度器还未初始化，直接调用属性来初始化
             self.sync_scheduler._incremental_sync_job()
 
     def _full_sync_job(self):
         """全量同步任务"""
-        if hasattr(self, 'sync_scheduler'):
+        if self._sync_scheduler is not None:
+            self._sync_scheduler._full_sync_job()
+        else:
+            # 如果调度器还未初始化，直接调用属性来初始化
             self.sync_scheduler._full_sync_job()
 
     def _send_notification(self, title: str, text: str, image: str = None):
         """发送通知"""
-        if hasattr(self, 'notification_manager'):
+        if self._notification_manager is not None:
+            self._notification_manager.send_notification(title, text, image)
+        else:
+            # 如果通知管理器还未初始化，直接调用属性来初始化
             self.notification_manager.send_notification(title, text, image)
 
     def _get_directories(self, path: str = "/") -> List[Dict[str, Any]]:
@@ -506,13 +600,12 @@ class TransferSync(_PluginBase):
         # 获取可用的通知渠道
         notification_options = []
         try:
-            if hasattr(self, 'notification_manager'):
-                available_channels = self.notification_manager.get_available_channels()
-                notification_options = [
-                    {"title": info.get("name", name), "value": name}
-                    for name, info in available_channels.items()
-                    if info.get("enabled", False)
-                ]
+            available_channels = self.notification_manager.get_available_channels()
+            notification_options = [
+                {"title": info.get("name", name), "value": name}
+                for name, info in available_channels.items()
+                if info.get("enabled", False)
+            ]
         except Exception as e:
             logger.error(f"获取通知渠道失败: {str(e)}")
 
