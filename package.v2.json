@@ -1,18 +1,14 @@
 {
-  "TransferSync": {
-    "name": "CloudDrive2助手",
-    "description": "监听可选择的多种事件类型，根据过滤条件自动同步文件到指定位置，支持多种同步策略、事件统计监控、文件过滤和进度跟踪。",
-    "labels": "文件管理,同步,备份,高级,事件监听",
-    "version": "1.4",
-    "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/sync_A.png",
-    "author": "MoviePilot",
+  "Cd2Assistant": {
+    "name": "Cd2助手",
+    "description": "监控上传任务，检测是否有异常，发送通知。",
+    "labels": "CloudDrive2,监控,通知,助手",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png",
+    "author": "thsrite",
     "level": 2,
     "history": {
-      "v1.4": "修复UI显示问题：解决导入冲突、版本号匹配、配置表单加载，完善插件初始化逻辑和事件处理机制",
-      "v1.3": "代码优化升级：统一事件处理机制，原子文件操作，全面配置验证，增强错误恢复，性能监控告警，改进UI交互体验",
-      "v1.2": "事件监听升级：支持可选择的多种触发事件类型（整理完成、下载添加、订阅完成等8种事件），添加事件过滤条件配置、事件统计监控功能、可视化统计界面，优化代码结构和性能",
-      "v1.1": "重大更新：添加多种同步策略(复制/移动/硬链接/软链接)、文件过滤功能、进度跟踪、批量和队列同步模式、配置验证、可视化统计界面",
-      "v1.0": "初始版本，支持整理后自动同步、增量同步和全量同步功能"
+      "v1.0.0": "初始版本，支持CloudDrive2上传任务监控、Cookie过期检测、系统信息查看、云下载功能"
     }
   }
 }
