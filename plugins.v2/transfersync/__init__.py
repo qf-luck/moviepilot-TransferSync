@@ -235,17 +235,15 @@ class TransferSync(_PluginBase):
                 "path": "/get_config_api",
                 "endpoint": self.get_config_api,
                 "methods": ["GET"],
-                "auth": "bear",
                 "summary": "获取配置API",
-                "description": "为Vue前端提供配置数据"
+                "description": "为前端提供配置数据"
             },
             {
                 "path": "/save_config_api",
                 "endpoint": self.save_config_api,
                 "methods": ["POST"],
-                "auth": "bear",
                 "summary": "保存配置API",
-                "description": "为Vue前端保存配置数据"
+                "description": "为前端保存配置数据"
             }
         ]
 
@@ -255,9 +253,9 @@ class TransferSync(_PluginBase):
         返回插件使用的前端渲染模式
         :return: 前端渲染模式，前端文件目录
         """
-        # 使用Vue模式以获得更好的用户体验
-        return "vue", "dist/assets"  # Vue模块联邦模式
-        # return "vuetify", None  # 传统Vuetify JSON配置模式
+        # 暂时回到Vuetify模式，确保功能正常
+        return "vuetify", None  # 传统Vuetify JSON配置模式
+        # return "vue", "dist/assets"  # Vue模块联邦模式
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         """获取配置表单 - 支持Vuetify和Vue模式"""
@@ -296,29 +294,19 @@ class TransferSync(_PluginBase):
         }
 
     def _get_vuetify_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        """获取Vuetify模式的表单配置 - 按要求重新设计"""
+        """获取Vuetify模式的表单配置 - 简化版本"""
         return [
             {
                 'component': 'VForm',
                 'content': [
+                    # 说明信息
                     {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
-                                'content': [
-                                    {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'info',
-                                            'variant': 'tonal',
-                                            'text': '整理后同步插件 - 支持增量和全量同步策略，可选延迟执行'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
+                        'component': 'VAlert',
+                        'props': {
+                            'type': 'info',
+                            'variant': 'tonal',
+                            'text': '整理后同步插件 - 支持增量和全量同步策略，监听多种事件类型自动同步文件'
+                        }
                     },
                     # 基础开关
                     {
@@ -352,52 +340,39 @@ class TransferSync(_PluginBase):
                             }
                         ]
                     },
-                    # 同步路径配置 - 真正参考p115strmhelper：两个独立的输入框
+                    # 同步路径配置
                     {
                         'component': 'VRow',
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 5},
+                                'props': {'cols': 12},
                                 'content': [
                                     {
                                         'component': 'VTextField',
                                         'props': {
                                             'model': 'source_path',
                                             'label': '源路径',
-                                            'placeholder': '请输入或选择源路径',
-                                            'appendInnerIcon': 'mdi-folder-search',
-                                            'onclick:appendInner': 'browseSourcePath'
+                                            'placeholder': '请输入源路径，例如：/downloads'
                                         }
                                     }
                                 ]
-                            },
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 5},
+                                'props': {'cols': 12},
                                 'content': [
                                     {
                                         'component': 'VTextField',
                                         'props': {
                                             'model': 'target_path',
                                             'label': '目标路径',
-                                            'placeholder': '请输入或选择目标路径',
-                                            'appendInnerIcon': 'mdi-folder-search',
-                                            'onclick:appendInner': 'browseTargetPath'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 2},
-                                'content': [
-                                    {
-                                        'component': 'VBtn',
-                                        'props': {
-                                            'text': '添加路径',
-                                            'color': 'primary',
-                                            'onclick': 'addSyncPath'
+                                            'placeholder': '请输入目标路径，例如：/media'
                                         }
                                     }
                                 ]
@@ -606,106 +581,23 @@ class TransferSync(_PluginBase):
                             }
                         ]
                     },
-                    # 文件浏览对话框
-                    {
-                        'component': 'VDialog',
-                        'props': {
-                            'model': 'file_browser_dialog',
-                            'maxWidth': '800px'
-                        },
-                        'content': [
-                            {
-                                'component': 'VCard',
-                                'content': [
-                                    {
-                                        'component': 'VCardTitle',
-                                        'text': '选择目录'
-                                    },
-                                    {
-                                        'component': 'VCardText',
-                                        'content': [
-                                            {
-                                                'component': 'VTextField',
-                                                'props': {
-                                                    'model': 'current_browse_path',
-                                                    'label': '当前路径',
-                                                    'readonly': True
-                                                }
-                                            },
-                                            {
-                                                'component': 'VList',
-                                                'props': {
-                                                    'model': 'file_list_items'
-                                                },
-                                                'content': [
-                                                    {
-                                                        'component': 'VListItem',
-                                                        'props': {
-                                                            'v-for': 'item in file_list_items',
-                                                            'key': 'item.path',
-                                                            'onclick': 'selectFileItem(item)'
-                                                        },
-                                                        'content': [
-                                                            {
-                                                                'component': 'VListItemContent',
-                                                                'content': [
-                                                                    {
-                                                                        'component': 'VListItemTitle',
-                                                                        'text': '{{ item.name }}'
-                                                                    }
-                                                                ]
-                                                            }
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VCardActions',
-                                        'content': [
-                                            {
-                                                'component': 'VBtn',
-                                                'props': {
-                                                    'text': '取消',
-                                                    'onclick': 'closeBrowser'
-                                                }
-                                            },
-                                            {
-                                                'component': 'VBtn',
-                                                'props': {
-                                                    'text': '确定',
-                                                    'color': 'primary',
-                                                    'onclick': 'confirmPath'
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
                 ]
             }
         ], {
-            "enabled": False,
+            "enabled": self._enabled,
             "source_path": "",
             "target_path": "",
-            "sync_paths": "",
-            "sync_type": "incremental",
-            "execution_mode": "immediate",
-            "delay_minutes": 5,
-            "enable_notifications": False,
-            "sync_strategy": "copy",
-            "max_depth": -1,
-            "file_filters": "",
-            "exclude_patterns": "",
-            "max_workers": 4,
-            "trigger_events": ["transfer.complete"],
-            "file_browser_dialog": False,
-            "current_browse_path": "",
-            "file_list_items": [],
-            "browse_type": ""
+            "sync_paths": "\n".join([f"{p.get('source', '')}->{p.get('target', '')}" for p in self._sync_paths]) if self._sync_paths else "",
+            "sync_type": self._sync_type.value if hasattr(self._sync_type, 'value') else str(self._sync_type),
+            "execution_mode": self._execution_mode.value if hasattr(self._execution_mode, 'value') else str(self._execution_mode),
+            "delay_minutes": self._delay_minutes,
+            "enable_notifications": self._enable_notifications,
+            "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
+            "max_depth": self._max_depth,
+            "file_filters": ",".join(self._file_filters),
+            "exclude_patterns": ",".join(self._exclude_patterns),
+            "max_workers": self._max_workers,
+            "trigger_events": [event.value if hasattr(event, 'value') else str(event) for event in self._trigger_events]
         }
 
     # API 端点方法
@@ -947,16 +839,17 @@ class TransferSync(_PluginBase):
             logger.error(f"获取配置API失败: {str(e)}")
             return {"success": False, "error": str(e)}
 
-    def save_config_api(self, config_data: Dict[str, Any]) -> Dict[str, Any]:
-        """保存配置API - 为Vue前端保存配置"""
+    def save_config_api(self, config_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """保存配置API - 为前端保存配置"""
         try:
-            # 这里可以实现配置保存逻辑
-            # 通常会调用 MoviePilot 的配置保存接口
-            logger.info("Vue前端配置保存请求已接收")
+            if config_data:
+                # 这里可以实现配置保存逻辑
+                # 通常会调用 MoviePilot 的配置保存接口
+                logger.info(f"前端配置保存请求已接收: {list(config_data.keys())}")
             return {
                 "success": True,
                 "message": "配置保存成功",
-                "data": config_data
+                "data": config_data or {}
             }
         except Exception as e:
             logger.error(f"保存配置API失败: {str(e)}")
