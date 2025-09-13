@@ -3,7 +3,7 @@
 参考 p115strmhelper 的模块化设计，将功能拆分到不同模块
 """
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.plugins import _PluginBase
 from app.log import logger
