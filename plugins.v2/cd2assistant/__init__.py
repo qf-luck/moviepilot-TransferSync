@@ -34,7 +34,7 @@ class Cd2Assistant(_PluginBase):
     # 插件版本
     plugin_version = "1.0.0"
     # 插件作者
-    plugin_author = "thsrite"
+    plugin_author = "redream"
     # 作者主页
     author_url = "https://github.com/qf-luck/moviepilot-TransferSync"
     # 插件配置项ID前缀
