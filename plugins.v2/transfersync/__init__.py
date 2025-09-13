@@ -68,9 +68,11 @@ class TransferSync(_PluginBase):
         self._lock = threading.Lock()
 
         # 配置属性 - 按要求重新设计
-        self._sync_paths = []  # 多路径支持
+        self._source_path = ""  # 源路径
+        self._target_path = ""  # 目标路径
         self._delay_minutes = 5
         self._enable_notifications = False
+        self._notification_channel = "telegram"  # 通知渠道
         self._sync_strategy = SyncStrategy.COPY
         self._sync_type = SyncType.INCREMENTAL  # 增量同步/全量同步策略
         self._execution_mode = ExecutionMode.IMMEDIATE  # 立即/延迟执行
@@ -117,9 +119,11 @@ class TransferSync(_PluginBase):
     def _apply_config(self, config: Dict[str, Any]):
         """应用解析后的配置 - 按要求修改"""
         self._enabled = config.get("enabled", False)
-        self._sync_paths = config.get("sync_paths", [])
+        self._source_path = config.get("source_path", "")
+        self._target_path = config.get("target_path", "")
         self._delay_minutes = config.get("delay_minutes", 5)
         self._enable_notifications = config.get("enable_notifications", False)
+        self._notification_channel = config.get("notification_channel", "telegram")
         self._sync_strategy = config.get("sync_strategy", SyncStrategy.COPY)
         self._sync_type = config.get("sync_type", SyncType.INCREMENTAL)
         self._execution_mode = config.get("execution_mode", ExecutionMode.IMMEDIATE)
@@ -253,9 +257,9 @@ class TransferSync(_PluginBase):
         返回插件使用的前端渲染模式
         :return: 前端渲染模式，前端文件目录
         """
-        # 暂时回到Vuetify模式，确保功能正常
-        return "vuetify", None  # 传统Vuetify JSON配置模式
-        # return "vue", "dist/assets"  # Vue模块联邦模式
+        # 使用Vue模块联邦模式，参考联邦.md文档
+        return "vue", "dist/assets"  # Vue模块联邦模式
+        # return "vuetify", None  # 传统Vuetify JSON配置模式
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         """获取配置表单 - 支持Vuetify和Vue模式"""
@@ -273,24 +277,19 @@ class TransferSync(_PluginBase):
         """获取Vue模式的配置数据"""
         return {
             "enabled": self._enabled,
-            "source_path": "",
-            "target_path": "",
-            "sync_paths": "\n".join([f"{p['source']}->{p['target']}" for p in self._sync_paths]),
+            "source_path": self._source_path,
+            "target_path": self._target_path,
             "sync_type": self._sync_type.value if hasattr(self._sync_type, 'value') else str(self._sync_type),
             "execution_mode": self._execution_mode.value if hasattr(self._execution_mode, 'value') else str(self._execution_mode),
             "delay_minutes": self._delay_minutes,
             "enable_notifications": self._enable_notifications,
+            "notification_channel": self._notification_channel,
             "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
             "max_depth": self._max_depth,
             "file_filters": ",".join(self._file_filters),
             "exclude_patterns": ",".join(self._exclude_patterns),
             "max_workers": self._max_workers,
-            "trigger_events": [event.value for event in self._trigger_events],
-            # 文件浏览器状态
-            "file_browser_dialog": False,
-            "current_browse_path": "",
-            "file_list_items": [],
-            "browse_type": ""
+            "trigger_events": [event.value if hasattr(event, 'value') else str(event) for event in self._trigger_events]
         }
 
     def _get_vuetify_form(self) -> Tuple[List[dict], Dict[str, Any]]:
@@ -585,13 +584,13 @@ class TransferSync(_PluginBase):
             }
         ], {
             "enabled": self._enabled,
-            "source_path": "",
-            "target_path": "",
-            "sync_paths": "\n".join([f"{p.get('source', '')}->{p.get('target', '')}" for p in self._sync_paths]) if self._sync_paths else "",
+            "source_path": self._source_path,
+            "target_path": self._target_path,
             "sync_type": self._sync_type.value if hasattr(self._sync_type, 'value') else str(self._sync_type),
             "execution_mode": self._execution_mode.value if hasattr(self._execution_mode, 'value') else str(self._execution_mode),
             "delay_minutes": self._delay_minutes,
             "enable_notifications": self._enable_notifications,
+            "notification_channel": self._notification_channel,
             "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
             "max_depth": self._max_depth,
             "file_filters": ",".join(self._file_filters),
@@ -606,11 +605,14 @@ class TransferSync(_PluginBase):
         try:
             status = {
                 "enabled": self._enabled,
-                "sync_paths_count": len(self._sync_paths),
+                "sync_paths_count": 1 if self._source_path and self._target_path else 0,
                 "sync_strategy": self._sync_strategy.value if hasattr(self._sync_strategy, 'value') else str(self._sync_strategy),
                 "sync_type": self._sync_type.value if hasattr(self._sync_type, 'value') else str(self._sync_type),
                 "execution_mode": self._execution_mode.value if hasattr(self._execution_mode, 'value') else str(self._execution_mode),
-                "delay_minutes": self._delay_minutes
+                "delay_minutes": self._delay_minutes,
+                "source_path": self._source_path,
+                "target_path": self._target_path,
+                "notification_channel": self._notification_channel
             }
 
             # 如果使用高级功能，添加更多状态信息
