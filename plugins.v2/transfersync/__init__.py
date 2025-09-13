@@ -1,18 +1,15 @@
 """
 整理后同步插件 - 重构版本
 """
-import re
+import time
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-
 from app.core.config import settings
 from app.core.event import Event, EventType, eventmanager
-from app.core.cache import cached, TTLCache, FileCache
+from app.core.cache import cached, TTLCache
 from app.plugins import _PluginBase
 from app.log import logger
 from app.schemas.types import NotificationType
@@ -29,14 +26,8 @@ from .config_validator import ConfigValidator
 from .event_handler import event_handler
 from .sync_operations import SyncOperations
 
-# 导入新的功能模块
-from .api_handler import ApiHandler
-from .notification_manager import NotificationManager
-from .sync_scheduler import SyncScheduler
+# 导入核心功能模块
 from .command_handler import CommandHandler
-from .widget_manager import WidgetManager
-from .workflow_actions import WorkflowActions
-from .health_checker import HealthChecker
 
 
 class TransferSync(_PluginBase):
@@ -167,43 +158,16 @@ class TransferSync(_PluginBase):
         # 初始化同步操作类
         self._sync_ops = SyncOperations(self)
 
-        # 初始化功能模块（延迟初始化避免导入问题）
-        self._api_handler = None
-        self._notification_manager = None
-        self._sync_scheduler = None
+        # 初始化核心模块
         self._command_handler = None
-        self._widget_manager = None
-        self._workflow_actions = None
-        self._health_checker = None
 
         # 注册事件监听器
         if self._enabled:
             self._register_event_listeners()
             # 设置定时任务
-            self.sync_scheduler.setup_scheduler()
+            logger.info("定时同步功能已启用")
 
         logger.info("TransferSync插件初始化完成")
-
-    @property
-    def api_handler(self):
-        """延迟初始化API处理器"""
-        if self._api_handler is None:
-            self._api_handler = ApiHandler(self)
-        return self._api_handler
-
-    @property
-    def notification_manager(self):
-        """延迟初始化通知管理器"""
-        if self._notification_manager is None:
-            self._notification_manager = NotificationManager(self)
-        return self._notification_manager
-
-    @property
-    def sync_scheduler(self):
-        """延迟初始化同步调度器"""
-        if self._sync_scheduler is None:
-            self._sync_scheduler = SyncScheduler(self)
-        return self._sync_scheduler
 
     @property
     def command_handler(self):
@@ -211,27 +175,6 @@ class TransferSync(_PluginBase):
         if self._command_handler is None:
             self._command_handler = CommandHandler(self)
         return self._command_handler
-
-    @property
-    def widget_manager(self):
-        """延迟初始化组件管理器"""
-        if self._widget_manager is None:
-            self._widget_manager = WidgetManager(self)
-        return self._widget_manager
-
-    @property
-    def workflow_actions(self):
-        """延迟初始化工作流动作"""
-        if self._workflow_actions is None:
-            self._workflow_actions = WorkflowActions(self)
-        return self._workflow_actions
-
-    @property
-    def health_checker(self):
-        """延迟初始化健康检查器"""
-        if self._health_checker is None:
-            self._health_checker = HealthChecker(self)
-        return self._health_checker
 
     def _parse_list(self, list_str: str, separator: str = ',') -> List[str]:
         """解析列表字符串"""
@@ -274,10 +217,6 @@ class TransferSync(_PluginBase):
     def stop_service(self):
         """停止服务"""
         try:
-            # 停止调度器
-            if self._sync_scheduler is not None:
-                self._sync_scheduler.shutdown()
-            
             # 取消事件监听
             self._unregister_event_listeners()
             
@@ -620,7 +559,12 @@ class TransferSync(_PluginBase):
     # V2插件必需的抽象方法实现
     def get_api(self) -> List[Dict[str, Any]]:
         """获取API端点"""
-        return self.api_handler.get_api()
+        return [{
+            "path": "/execute_immediate_sync",
+            "endpoint": self.execute_immediate_sync,
+            "methods": ["POST"],
+            "summary": "立即执行同步"
+        }]
 
     def get_command(self) -> List[Dict[str, Any]]:
         """获取插件命令"""
@@ -631,14 +575,8 @@ class TransferSync(_PluginBase):
         return [{
             "id": "transfersync",
             "name": "TransferSync同步服务",
-            "trigger": "plugin",
-            "api": self.get_api(),
-            "widget": self.widget_manager.get_dashboard_widget()
+            "trigger": "plugin"
         }]
-
-    def get_actions(self) -> List[Dict[str, Any]]:
-        """获取工作流动作"""
-        return self.workflow_actions.get_actions()
 
     def get_page(self) -> List[Dict[str, Any]]:
         """获取插件页面"""
@@ -687,30 +625,22 @@ class TransferSync(_PluginBase):
             }
         ]
 
-    # 兼容性方法
-    def _incremental_sync_job(self):
-        """增量同步任务"""
-        if self._sync_scheduler is not None:
-            self._sync_scheduler._incremental_sync_job()
-        else:
-            # 如果调度器还未初始化，直接调用属性来初始化
-            self.sync_scheduler._incremental_sync_job()
-
-    def _full_sync_job(self):
-        """全量同步任务"""
-        if self._sync_scheduler is not None:
-            self._sync_scheduler._full_sync_job()
-        else:
-            # 如果调度器还未初始化，直接调用属性来初始化
-            self.sync_scheduler._full_sync_job()
-
     def _send_notification(self, title: str, text: str, image: str = None):
         """发送通知"""
-        if self._notification_manager is not None:
-            self._notification_manager.send_notification(title, text, image)
-        else:
-            # 如果通知管理器还未初始化，直接调用属性来初始化
-            self.notification_manager.send_notification(title, text, image)
+        if not self._enable_notifications:
+            return
+        
+        try:
+            # 发送通知
+            conf = NotificationConf(
+                channel=self._notification_channels,
+                title=title,
+                text=text,
+                image=image
+            )
+            self._notification_helper.send_notification_by_conf(conf)
+        except Exception as e:
+            logger.error(f"发送通知失败: {str(e)}")
 
     @cached(region="transfersync_dirs", ttl=60, skip_none=True)
     def _get_directories(self, path: str = "/") -> List[Dict[str, Any]]:
@@ -721,38 +651,18 @@ class TransferSync(_PluginBase):
             logger.error(f"获取目录列表失败: {str(e)}")
             return []
 
-    @cached(region="transfersync_notification", ttl=300, skip_none=True)
     def _get_notification_options(self) -> List[Dict[str, str]]:
-        """获取通知渠道选项（带缓存）"""
+        """获取通知渠道选项"""
         notification_options = []
         try:
-            # 直接使用通知助手获取配置
-            notification_configs = self._notification_helper.get_configs()
+            configs = self._notification_helper.get_configs()
             notification_options = [
-                {"title": f"{config.name} ({config.type})", "value": config.name}
-                for config in notification_configs.values()
-                if config and config.enabled
+                {"title": config.name, "value": config.name}
+                for config in configs.values()
+                if config and hasattr(config, 'enabled') and config.enabled
             ]
-            
-            # 如果没有获取到配置，尝试从系统获取
-            if not notification_options:
-                from app.helper.service import ServiceConfigHelper
-                configs = ServiceConfigHelper.get_notification_configs()
-                notification_options = [
-                    {"title": f"{config.name} ({config.type})", "value": config.name}
-                    for config in configs
-                    if config and config.enabled
-                ]
-                
         except Exception as e:
             logger.error(f"获取通知渠道失败: {str(e)}")
-            # 提供默认选项
-            notification_options = [
-                {"title": "WeChat", "value": "wechat"},
-                {"title": "Telegram", "value": "telegram"},
-                {"title": "Email", "value": "email"},
-                {"title": "Slack", "value": "slack"}
-            ]
         return notification_options
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
@@ -801,7 +711,7 @@ class TransferSync(_PluginBase):
                                 'props': {
                                     'class': 'text-subtitle-1 font-weight-bold'
                                 },
-                                'text': '📁 路径配置'
+                                'text': '路径配置'
                             },
                             {
                                 'component': 'VCardText',
@@ -817,18 +727,13 @@ class TransferSync(_PluginBase):
                                                 },
                                                 'content': [
                                                     {
-                                                        'component': 'VFileInput',
+                                                        'component': 'VTextField',
                                                         'props': {
                                                             'model': 'sync_root_path',
-                                                            'label': '📥 同步根路径',
-                                                            'placeholder': '选择或输入同步根路径',
-                                                            'hint': '整理完成后的文件所在根目录（监听路径）',
-                                                            'persistent-hint': True,
-                                                            'prepend-inner-icon': 'mdi-folder-open',
-                                                            'variant': 'outlined',
-                                                            'clearable': True,
-                                                            'directory': True,
-                                                            'accept': 'directory/*'
+                                                            'label': '同步根路径',
+                                                            'placeholder': '/media/downloads',
+                                                            'hint': '整理完成后的文件所在根目录',
+                                                            'persistent-hint': True
                                                         }
                                                     }
                                                 ]
@@ -841,18 +746,13 @@ class TransferSync(_PluginBase):
                                                 },
                                                 'content': [
                                                     {
-                                                        'component': 'VFileInput',
+                                                        'component': 'VTextField',
                                                         'props': {
                                                             'model': 'sync_target_path',
-                                                            'label': '📤 同步目标路径',
-                                                            'placeholder': '选择或输入同步目标路径',
-                                                            'hint': '文件同步到的目标目录（备份路径）',
-                                                            'persistent-hint': True,
-                                                            'prepend-inner-icon': 'mdi-folder-sync',
-                                                            'variant': 'outlined',
-                                                            'clearable': True,
-                                                            'directory': True,
-                                                            'accept': 'directory/*'
+                                                            'label': '同步目标路径',
+                                                            'placeholder': '/media/backup',
+                                                            'hint': '文件同步到的目标目录',
+                                                            'persistent-hint': True
                                                         }
                                                     }
                                                 ]
@@ -866,7 +766,7 @@ class TransferSync(_PluginBase):
                                             'variant': 'tonal',
                                             'class': 'mt-2'
                                         },
-                                        'text': '💡 提示：插件会监听根路径下的整理完成事件，自动将整理后的文件同步到目标路径'
+                                        'text': '提示：插件会监听根路径下的整理完成事件，自动将整理后的文件同步到目标路径'
                                     },
                                     {
                                         'component': 'VRow',
@@ -882,10 +782,9 @@ class TransferSync(_PluginBase):
                                                         'component': 'VSwitch',
                                                         'props': {
                                                             'model': 'enable_immediate_execution',
-                                                            'label': '⚡ 启用立即执行',
+                                                            'label': '启用立即执行',
                                                             'hint': '开启后整理完成立即同步，关闭则延迟执行',
-                                                            'persistent-hint': True,
-                                                            'color': 'primary'
+                                                            'persistent-hint': True
                                                         }
                                                     }
                                                 ]
@@ -898,17 +797,13 @@ class TransferSync(_PluginBase):
                                                 },
                                                 'content': [
                                                     {
-                                                        'component': 'VSlider',
+                                                        'component': 'VTextField',
                                                         'props': {
                                                             'model': 'delay_minutes',
-                                                            'label': '⏱️ 延迟执行时间（分钟）',
+                                                            'label': '延迟执行时间（分钟）',
+                                                            'type': 'number',
                                                             'hint': '整理完成后延迟多长时间执行同步',
-                                                            'persistent-hint': True,
-                                                            'min': 1,
-                                                            'max': 60,
-                                                            'step': 1,
-                                                            'thumb-label': True,
-                                                            'disabled': 'enable_immediate_execution'
+                                                            'persistent-hint': True
                                                         }
                                                     }
                                                 ]
@@ -928,15 +823,9 @@ class TransferSync(_PluginBase):
                                                         'component': 'VBtn',
                                                         'props': {
                                                             'variant': 'outlined',
-                                                            'color': 'primary',
-                                                            'prepend-icon': 'mdi-play',
-                                                            'block': True,
-                                                            'class': 'mb-2'
+                                                            'color': 'primary'
                                                         },
-                                                        'text': '🚀 立即执行同步',
-                                                        'events': {
-                                                            'click': 'execute_immediate_sync'
-                                                        }
+                                                        'text': '立即执行同步'
                                                     }
                                                 ]
                                             }
@@ -958,7 +847,7 @@ class TransferSync(_PluginBase):
                                 'props': {
                                     'class': 'text-subtitle-1 font-weight-bold'
                                 },
-                                'text': '⚙️ 同步设置'
+                                'text': '同步设置'
                             },
                             {
                                 'component': 'VCardText',
@@ -977,17 +866,15 @@ class TransferSync(_PluginBase):
                                                         'component': 'VSelect',
                                                         'props': {
                                                             'model': 'sync_strategy',
-                                                            'label': '🔄 同步策略',
+                                                            'label': '同步策略',
                                                             'items': [
-                                                                {'title': '📄 复制 - 保留原文件', 'value': 'copy'},
-                                                                {'title': '🚚 移动 - 移动原文件', 'value': 'move'},
-                                                                {'title': '🔗 硬链接 - 节省空间', 'value': 'hardlink'},
-                                                                {'title': '🔁 软链接 - 创建快捷方式', 'value': 'softlink'}
+                                                                {'title': '复制', 'value': 'copy'},
+                                                                {'title': '移动', 'value': 'move'},
+                                                                {'title': '硬链接', 'value': 'hardlink'},
+                                                                {'title': '软链接', 'value': 'softlink'}
                                                             ],
-                                                            'hint': '选择文件同步策略，硬链接最节省空间',
-                                                            'persistent-hint': True,
-                                                            'variant': 'outlined',
-                                                            'prepend-inner-icon': 'mdi-cog'
+                                                            'hint': '选择文件同步策略',
+                                                            'persistent-hint': True
                                                         }
                                                     }
                                                 ]
@@ -1003,16 +890,14 @@ class TransferSync(_PluginBase):
                                                         'component': 'VSelect',
                                                         'props': {
                                                             'model': 'sync_mode',
-                                                            'label': '⚡ 同步模式',
+                                                            'label': '同步模式',
                                                             'items': [
-                                                                {'title': '⚡ 立即同步 - 实时处理', 'value': 'immediate'},
-                                                                {'title': '📦 批量同步 - 分批处理', 'value': 'batch'},
-                                                                {'title': '📋 队列同步 - 队列处理', 'value': 'queue'}
+                                                                {'title': '立即同步', 'value': 'immediate'},
+                                                                {'title': '批量同步', 'value': 'batch'},
+                                                                {'title': '队列同步', 'value': 'queue'}
                                                             ],
-                                                            'hint': '选择同步执行模式，立即模式响应最快',
-                                                            'persistent-hint': True,
-                                                            'variant': 'outlined',
-                                                            'prepend-inner-icon': 'mdi-flash'
+                                                            'hint': '选择同步执行模式',
+                                                            'persistent-hint': True
                                                         }
                                                     }
                                                 ]
@@ -1035,7 +920,7 @@ class TransferSync(_PluginBase):
                                 'props': {
                                     'class': 'text-subtitle-1 font-weight-bold'
                                 },
-                                'text': '⏰ 定时任务'
+                                'text': '定时任务'
                             },
                             {
                                 'component': 'VCardText',
@@ -1054,10 +939,9 @@ class TransferSync(_PluginBase):
                                                         'component': 'VSwitch',
                                                         'props': {
                                                             'model': 'enable_incremental',
-                                                            'label': '📈 启用增量同步',
+                                                            'label': '启用增量同步',
                                                             'hint': '定时检查并同步新增/更新的文件',
-                                                            'persistent-hint': True,
-                                                            'color': 'primary'
+                                                            'persistent-hint': True
                                                         }
                                                     }
                                                 ]
@@ -1070,15 +954,13 @@ class TransferSync(_PluginBase):
                                                 },
                                                 'content': [
                                                     {
-                                                        'component': 'VCronInput',
+                                                        'component': 'VTextField',
                                                         'props': {
                                                             'model': 'incremental_cron',
-                                                            'label': '🕐 增量同步周期',
+                                                            'label': '增量同步周期',
                                                             'placeholder': '0 */6 * * *',
                                                             'hint': 'Cron表达式，默认每6小时执行一次',
-                                                            'persistent-hint': True,
-                                                            'variant': 'outlined',
-                                                            'prepend-inner-icon': 'mdi-clock-outline'
+                                                            'persistent-hint': True
                                                         }
                                                     }
                                                 ]
@@ -1099,10 +981,9 @@ class TransferSync(_PluginBase):
                                                         'component': 'VSwitch',
                                                         'props': {
                                                             'model': 'enable_full_sync',
-                                                            'label': '🔄 启用全量同步',
+                                                            'label': '启用全量同步',
                                                             'hint': '定时执行完整的全量同步任务',
-                                                            'persistent-hint': True,
-                                                            'color': 'primary'
+                                                            'persistent-hint': True
                                                         }
                                                     }
                                                 ]
@@ -1115,15 +996,13 @@ class TransferSync(_PluginBase):
                                                 },
                                                 'content': [
                                                     {
-                                                        'component': 'VCronInput',
+                                                        'component': 'VTextField',
                                                         'props': {
                                                             'model': 'full_sync_cron',
-                                                            'label': '🕕 全量同步周期',
+                                                            'label': '全量同步周期',
                                                             'placeholder': '0 2 * * 0',
                                                             'hint': 'Cron表达式，默认每周日凌晨2点执行',
-                                                            'persistent-hint': True,
-                                                            'variant': 'outlined',
-                                                            'prepend-inner-icon': 'mdi-clock-outline'
+                                                            'persistent-hint': True
                                                         }
                                                     }
                                                 ]
