@@ -1,5 +1,5 @@
 {
-  "TransferSync": {
+  "CloudDrive2助手": {
     "name": "CloudDrive2助手",
     "description": "监听可选择的多种事件类型，根据过滤条件自动同步文件到指定位置，支持多种同步策略、事件统计监控、文件过滤和进度跟踪。",
     "labels": "文件管理,同步,备份,高级,事件监听",
