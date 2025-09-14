@@ -13,14 +13,15 @@
   },
   "Cd2Upload": {
     "name": "CloudDrive2智能上传",
-    "description": "智能上传媒体文件到CloudDrive2，支持上传监控、任务管理、通知Cloud Media Sync处理STRM，整合cd2tool功能",
-    "labels": "CloudDrive2,上传,STRM,智能,监控,Cloud Media Sync",
-    "version": "2.1.0",
+    "description": "专注CloudDrive2文件上传和监控管理，通知Cloud Media Sync处理后续文件管理任务，实现功能解耦",
+    "labels": "CloudDrive2,上传,监控,Cloud Media Sync,解耦",
+    "version": "2.2.0",
     "icon": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png",
     "author": "honue & enhanced",
     "level": 1,
     "v2": true,
     "history": {
+      "v2.2.0": "功能重新定位：移除STRM生成相关配置，专注于上传和监控，通过事件通知Cloud Media Sync处理后续任务，实现插件间解耦",
       "v2.1.0": "完善配置项：添加Cookie检测、监控间隔、清理间隔、上传超时、删除源文件、收藏通知等完整配置选项；改为通知Cloud Media Sync处理STRM生成",
       "v2.0.0": "重大更新：整合cd2tool功能，添加上传任务监控、失败通知、事件驱动STRM生成、多CD2实例支持、智能重试机制"
     }
