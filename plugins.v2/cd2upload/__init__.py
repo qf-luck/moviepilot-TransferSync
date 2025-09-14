@@ -2,12 +2,22 @@ import os
 import shutil
 import threading
 import time
+import json
+import hashlib
+import uuid
+import logging.handlers
+import hmac
+import base64
+import traceback
 from datetime import datetime, timedelta
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, Union, Callable
 from queue import Queue, PriorityQueue
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from enum import Enum
 import random
+from pathlib import Path
+from urllib.parse import urlencode
+import requests
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -330,6 +340,682 @@ class UploadStatistics:
             self.hourly_stats = {k: v for k, v in self.hourly_stats.items() if k >= cutoff_hour}
 
 
+class EnterpriseLogger:
+    """企业级日志管理器"""
+    
+    def __init__(self, plugin_name: str, log_dir: str = None):
+        self.plugin_name = plugin_name
+        self.log_dir = Path(log_dir) if log_dir else Path("logs")
+        self.log_dir.mkdir(exist_ok=True)
+        
+        # 创建专用的企业级logger
+        self.logger = logging.getLogger(f"enterprise_{plugin_name}")
+        self.logger.setLevel(logging.INFO)
+        self.logger.handlers.clear()
+        
+        # 业务操作日志
+        self.business_logger = self._create_rotating_logger(
+            "business", 
+            self.log_dir / f"{plugin_name}_business.log"
+        )
+        
+        # 性能监控日志
+        self.performance_logger = self._create_rotating_logger(
+            "performance", 
+            self.log_dir / f"{plugin_name}_performance.log"
+        )
+        
+        # 安全审计日志
+        self.audit_logger = self._create_rotating_logger(
+            "audit", 
+            self.log_dir / f"{plugin_name}_audit.log"
+        )
+        
+        # 错误日志
+        self.error_logger = self._create_rotating_logger(
+            "error", 
+            self.log_dir / f"{plugin_name}_error.log"
+        )
+        
+        self.session_id = str(uuid.uuid4())[:8]
+    
+    def _create_rotating_logger(self, name: str, filepath: Path) -> logging.Logger:
+        """创建轮转日志记录器"""
+        logger = logging.getLogger(f"{self.plugin_name}_{name}")
+        logger.setLevel(logging.INFO)
+        logger.handlers.clear()
+        
+        # 使用RotatingFileHandler实现日志轮转
+        handler = logging.handlers.RotatingFileHandler(
+            filepath, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8'
+        )
+        
+        formatter = logging.Formatter(
+            '%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        
+        return logger
+    
+    def log_business_event(self, event_type: str, details: Dict, user_id: str = None, 
+                          file_path: str = None, status: str = "INFO"):
+        """记录业务事件"""
+        log_entry = {
+            "session_id": self.session_id,
+            "timestamp": datetime.now().isoformat(),
+            "event_type": event_type,
+            "user_id": user_id or "system",
+            "file_path": file_path,
+            "status": status,
+            "details": details
+        }
+        self.business_logger.info(json.dumps(log_entry, ensure_ascii=False))
+    
+    def log_performance_metric(self, metric_name: str, value: Union[int, float], 
+                              unit: str = None, tags: Dict = None):
+        """记录性能指标"""
+        log_entry = {
+            "session_id": self.session_id,
+            "timestamp": datetime.now().isoformat(),
+            "metric_name": metric_name,
+            "value": value,
+            "unit": unit,
+            "tags": tags or {}
+        }
+        self.performance_logger.info(json.dumps(log_entry, ensure_ascii=False))
+    
+    def log_audit_event(self, action: str, resource: str, user_id: str = None, 
+                       result: str = "SUCCESS", details: Dict = None):
+        """记录审计事件"""
+        log_entry = {
+            "session_id": self.session_id,
+            "timestamp": datetime.now().isoformat(),
+            "action": action,
+            "resource": resource,
+            "user_id": user_id or "system",
+            "result": result,
+            "details": details or {}
+        }
+        self.audit_logger.info(json.dumps(log_entry, ensure_ascii=False))
+    
+    def log_error(self, error_type: str, error_message: str, stack_trace: str = None,
+                  context: Dict = None):
+        """记录错误"""
+        log_entry = {
+            "session_id": self.session_id,
+            "timestamp": datetime.now().isoformat(),
+            "error_type": error_type,
+            "error_message": error_message,
+            "stack_trace": stack_trace,
+            "context": context or {}
+        }
+        self.error_logger.error(json.dumps(log_entry, ensure_ascii=False))
+
+
+class DistributedLock:
+    """分布式锁实现"""
+    
+    def __init__(self, resource_name: str, timeout: int = 300):
+        self.resource_name = resource_name
+        self.timeout = timeout
+        self.lock_id = str(uuid.uuid4())
+        self.acquired = False
+        self.lock_file = Path(f"/tmp/cd2upload_lock_{hashlib.md5(resource_name.encode()).hexdigest()}")
+        
+    def acquire(self) -> bool:
+        """获取锁"""
+        try:
+            current_time = time.time()
+            
+            # 检查锁文件是否存在
+            if self.lock_file.exists():
+                with open(self.lock_file, 'r') as f:
+                    lock_data = json.loads(f.read())
+                    
+                # 检查锁是否过期
+                if current_time - lock_data['acquired_time'] > self.timeout:
+                    # 锁已过期，删除旧锁
+                    self.lock_file.unlink(missing_ok=True)
+                else:
+                    return False
+            
+            # 创建新锁
+            lock_data = {
+                'lock_id': self.lock_id,
+                'resource_name': self.resource_name,
+                'acquired_time': current_time,
+                'timeout': self.timeout
+            }
+            
+            with open(self.lock_file, 'w') as f:
+                f.write(json.dumps(lock_data))
+            
+            self.acquired = True
+            return True
+            
+        except Exception:
+            return False
+    
+    def release(self) -> bool:
+        """释放锁"""
+        try:
+            if not self.acquired:
+                return True
+                
+            if not self.lock_file.exists():
+                return True
+                
+            with open(self.lock_file, 'r') as f:
+                lock_data = json.loads(f.read())
+                
+            # 验证锁的所有权
+            if lock_data['lock_id'] == self.lock_id:
+                self.lock_file.unlink()
+                self.acquired = False
+                return True
+                
+            return False
+            
+        except Exception:
+            return False
+    
+    def __enter__(self):
+        if not self.acquire():
+            raise RuntimeError(f"无法获取资源锁: {self.resource_name}")
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+
+
+class QuotaManager:
+    """配额管理器"""
+    
+    def __init__(self):
+        self.quotas = {}
+        self.usage = {}
+        self.lock = threading.Lock()
+    
+    def set_quota(self, resource_type: str, limit: int, window_seconds: int = 3600):
+        """设置配额限制"""
+        with self.lock:
+            self.quotas[resource_type] = {
+                'limit': limit,
+                'window': window_seconds,
+                'reset_time': time.time() + window_seconds
+            }
+            if resource_type not in self.usage:
+                self.usage[resource_type] = 0
+    
+    def check_quota(self, resource_type: str, requested: int = 1) -> bool:
+        """检查配额是否允许请求"""
+        with self.lock:
+            if resource_type not in self.quotas:
+                return True
+                
+            quota = self.quotas[resource_type]
+            current_time = time.time()
+            
+            # 检查是否需要重置配额
+            if current_time >= quota['reset_time']:
+                self.usage[resource_type] = 0
+                quota['reset_time'] = current_time + quota['window']
+            
+            # 检查配额
+            if self.usage[resource_type] + requested <= quota['limit']:
+                self.usage[resource_type] += requested
+                return True
+            
+            return False
+    
+    def get_quota_status(self, resource_type: str) -> Dict:
+        """获取配额状态"""
+        with self.lock:
+            if resource_type not in self.quotas:
+                return {"error": "配额未设置"}
+                
+            quota = self.quotas[resource_type]
+            current_time = time.time()
+            
+            return {
+                "limit": quota['limit'],
+                "used": self.usage.get(resource_type, 0),
+                "remaining": max(0, quota['limit'] - self.usage.get(resource_type, 0)),
+                "reset_in": max(0, int(quota['reset_time'] - current_time)),
+                "reset_time": datetime.fromtimestamp(quota['reset_time']).isoformat()
+            }
+
+
+class HealthChecker:
+    """健康检查器"""
+    
+    def __init__(self, plugin_instance):
+        self.plugin = plugin_instance
+        self.health_status = {
+            "overall": "healthy",
+            "components": {},
+            "last_check": None
+        }
+        self.lock = threading.Lock()
+    
+    def check_health(self) -> Dict:
+        """执行健康检查"""
+        with self.lock:
+            checks = {
+                "queue_health": self._check_queue_health(),
+                "storage_health": self._check_storage_health(),
+                "cd2_clients_health": self._check_cd2_clients_health(),
+                "statistics_health": self._check_statistics_health()
+            }
+            
+            # 计算整体健康状态
+            failed_checks = [k for k, v in checks.items() if v.get("status") != "healthy"]
+            overall_status = "unhealthy" if failed_checks else "healthy"
+            
+            self.health_status = {
+                "overall": overall_status,
+                "components": checks,
+                "last_check": datetime.now().isoformat(),
+                "failed_components": failed_checks
+            }
+            
+            return self.health_status
+    
+    def _check_queue_health(self) -> Dict:
+        """检查队列健康状态"""
+        try:
+            if not self.plugin._upload_queue:
+                return {"status": "disabled", "message": "队列管理未启用"}
+                
+            queue_status = self.plugin._upload_queue.get_queue_status()
+            
+            # 检查队列是否阻塞
+            if queue_status.get("active", 0) == 0 and queue_status.get("queued", 0) > 0:
+                return {"status": "warning", "message": "队列可能阻塞", "details": queue_status}
+            
+            return {"status": "healthy", "details": queue_status}
+            
+        except Exception as e:
+            return {"status": "unhealthy", "message": f"队列检查失败: {e}"}
+    
+    def _check_storage_health(self) -> Dict:
+        """检查存储健康状态"""
+        try:
+            # 检查软链接目录
+            softlink_path = Path(self.plugin._softlink_prefix_path)
+            if not softlink_path.exists():
+                return {"status": "warning", "message": "软链接目录不存在"}
+            
+            # 检查CloudDrive2挂载目录
+            cd2_path = Path(self.plugin._cd_mount_prefix_path)
+            if not cd2_path.parent.exists():
+                return {"status": "warning", "message": "CloudDrive2挂载目录不存在"}
+            
+            # 检查磁盘空间
+            statvfs = os.statvfs(cd2_path.parent)
+            free_space = statvfs.f_bavail * statvfs.f_frsize
+            total_space = statvfs.f_blocks * statvfs.f_frsize
+            usage_percent = (1 - free_space / total_space) * 100
+            
+            if usage_percent > 95:
+                return {"status": "critical", "message": "磁盘空间不足", 
+                       "details": {"usage_percent": round(usage_percent, 2)}}
+            elif usage_percent > 85:
+                return {"status": "warning", "message": "磁盘空间紧张",
+                       "details": {"usage_percent": round(usage_percent, 2)}}
+            
+            return {"status": "healthy", "details": {"usage_percent": round(usage_percent, 2)}}
+            
+        except Exception as e:
+            return {"status": "unhealthy", "message": f"存储检查失败: {e}"}
+    
+    def _check_cd2_clients_health(self) -> Dict:
+        """检查CloudDrive2客户端健康状态"""
+        try:
+            if not self.plugin._cd2_clients:
+                return {"status": "warning", "message": "未配置CloudDrive2客户端"}
+                
+            healthy_clients = 0
+            total_clients = len(self.plugin._cd2_clients)
+            
+            for name, client in self.plugin._cd2_clients.items():
+                try:
+                    # 简单的健康检查：尝试获取文件系统
+                    fs = client.fs
+                    if fs:
+                        healthy_clients += 1
+                except Exception:
+                    pass
+            
+            health_ratio = healthy_clients / total_clients
+            
+            if health_ratio == 0:
+                return {"status": "critical", "message": "所有CD2客户端不可用"}
+            elif health_ratio < 0.5:
+                return {"status": "warning", "message": f"部分CD2客户端不可用 ({healthy_clients}/{total_clients})"}
+            
+            return {"status": "healthy", "details": {"healthy_clients": healthy_clients, "total_clients": total_clients}}
+            
+        except Exception as e:
+            return {"status": "unhealthy", "message": f"CD2客户端检查失败: {e}"}
+    
+    def _check_statistics_health(self) -> Dict:
+        """检查统计系统健康状态"""
+        try:
+            if not self.plugin._statistics:
+                return {"status": "disabled", "message": "统计功能未启用"}
+                
+            # 检查统计数据的时效性
+            if not self.plugin._statistics.daily_stats:
+                return {"status": "warning", "message": "没有统计数据"}
+                
+            latest_date = max(self.plugin._statistics.daily_stats.keys())
+            today = datetime.now().strftime('%Y-%m-%d')
+            
+            if latest_date != today:
+                return {"status": "warning", "message": "统计数据不是最新的"}
+                
+            return {"status": "healthy"}
+            
+        except Exception as e:
+            return {"status": "unhealthy", "message": f"统计系统检查失败: {e}"}
+
+
+class APIHandler:
+    """REST API处理器"""
+    
+    def __init__(self, plugin_instance):
+        self.plugin = plugin_instance
+        self.api_routes = {}
+        self._setup_routes()
+    
+    def _setup_routes(self):
+        """设置API路由"""
+        self.api_routes = {
+            '/api/cd2upload/status': self._handle_status,
+            '/api/cd2upload/health': self._handle_health,
+            '/api/cd2upload/statistics': self._handle_statistics,
+            '/api/cd2upload/queue': self._handle_queue,
+            '/api/cd2upload/enterprise': self._handle_enterprise,
+            '/api/cd2upload/upload': self._handle_manual_upload,
+            '/api/cd2upload/config': self._handle_config,
+        }
+    
+    def handle_request(self, path: str, method: str, params: Dict = None, headers: Dict = None) -> Dict:
+        """处理API请求"""
+        try:
+            if path not in self.api_routes:
+                return {"error": "API路径不存在", "code": 404}
+                
+            handler = self.api_routes[path]
+            return handler(method, params or {}, headers or {})
+            
+        except Exception as e:
+            if self.plugin._enterprise_logger:
+                self.plugin._enterprise_logger.log_error(
+                    "api_request_error",
+                    str(e),
+                    traceback.format_exc(),
+                    {"path": path, "method": method}
+                )
+            return {"error": f"API请求处理失败: {str(e)}", "code": 500}
+    
+    def _handle_status(self, method: str, params: Dict, headers: Dict) -> Dict:
+        """处理状态查询"""
+        if method != "GET":
+            return {"error": "方法不允许", "code": 405}
+            
+        return {
+            "plugin": {
+                "name": self.plugin.plugin_name,
+                "version": self.plugin.plugin_version,
+                "status": "running"
+            },
+            "queue_status": self.plugin.get_queue_status(),
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    def _handle_health(self, method: str, params: Dict, headers: Dict) -> Dict:
+        """处理健康检查"""
+        if method != "GET":
+            return {"error": "方法不允许", "code": 405}
+            
+        health_status = self.plugin._health_checker.check_health() if self.plugin._health_checker else {"status": "disabled"}
+        return health_status
+    
+    def _handle_statistics(self, method: str, params: Dict, headers: Dict) -> Dict:
+        """处理统计查询"""
+        if method != "GET":
+            return {"error": "方法不允许", "code": 405}
+            
+        return self.plugin.get_statistics_dashboard()
+    
+    def _handle_queue(self, method: str, params: Dict, headers: Dict) -> Dict:
+        """处理队列管理"""
+        if method == "GET":
+            return self.plugin.get_queue_status()
+        elif method == "POST":
+            action = params.get("action")
+            if action == "clear":
+                # 清空队列（需要权限验证）
+                if self.plugin._upload_queue:
+                    self.plugin._upload_queue.clear_completed_history()
+                return {"message": "队列已清理", "code": 200}
+            else:
+                return {"error": "不支持的操作", "code": 400}
+        else:
+            return {"error": "方法不允许", "code": 405}
+    
+    def _handle_enterprise(self, method: str, params: Dict, headers: Dict) -> Dict:
+        """处理企业级功能"""
+        if method != "GET":
+            return {"error": "方法不允许", "code": 405}
+            
+        return self.plugin.get_enterprise_status()
+    
+    def _handle_manual_upload(self, method: str, params: Dict, headers: Dict) -> Dict:
+        """处理手动上传请求"""
+        if method != "POST":
+            return {"error": "方法不允许", "code": 405}
+            
+        files = params.get("files", [])
+        if not files:
+            return {"error": "文件列表为空", "code": 400}
+            
+        # 验证配额
+        if self.plugin._quota_manager and not self.plugin._quota_manager.check_quota("upload_requests", len(files)):
+            return {"error": "超出上传配额限制", "code": 429}
+        
+        # 加入上传队列
+        if self.plugin._upload_queue:
+            for file_path in files:
+                cd2_dest = file_path.replace(self.plugin._softlink_prefix_path, self.plugin._cd_mount_prefix_path)
+                task = UploadTask(file_path=file_path, cd2_dest=cd2_dest, priority=UploadPriority.HIGH)
+                self.plugin._upload_queue.add_task(task)
+                
+        return {"message": f"已加入 {len(files)} 个文件到上传队列", "code": 200}
+    
+    def _handle_config(self, method: str, params: Dict, headers: Dict) -> Dict:
+        """处理配置管理"""
+        if method == "GET":
+            # 返回配置概要（敏感信息除外）
+            return {
+                "queue_management": self.plugin._enable_queue_management,
+                "statistics": self.plugin._enable_statistics,
+                "enterprise_logging": self.plugin._enable_enterprise_logging,
+                "health_check": self.plugin._enable_health_check,
+                "quota_limit": self.plugin._quota_upload_limit,
+                "max_concurrent": self.plugin._max_concurrent_uploads
+            }
+        else:
+            return {"error": "配置修改需要通过Web界面", "code": 403}
+
+
+class WebHookManager:
+    """WebHook管理器"""
+    
+    def __init__(self, plugin_instance):
+        self.plugin = plugin_instance
+        self.webhooks = {}
+        self.webhook_queue = Queue()
+        self.webhook_thread = None
+        self._running = False
+        
+    def start(self):
+        """启动WebHook处理线程"""
+        if self._running:
+            return
+            
+        self._running = True
+        self.webhook_thread = threading.Thread(target=self._process_webhooks, daemon=True)
+        self.webhook_thread.start()
+        
+    def stop(self):
+        """停止WebHook处理"""
+        self._running = False
+        if self.webhook_thread:
+            self.webhook_thread.join(timeout=5)
+    
+    def register_webhook(self, event_type: str, url: str, secret: str = None, 
+                        headers: Dict = None, retry_count: int = 3):
+        """注册WebHook"""
+        webhook_id = str(uuid.uuid4())
+        self.webhooks[webhook_id] = {
+            "event_type": event_type,
+            "url": url,
+            "secret": secret,
+            "headers": headers or {},
+            "retry_count": retry_count,
+            "created_time": datetime.now().isoformat()
+        }
+        
+        if self.plugin._enterprise_logger:
+            self.plugin._enterprise_logger.log_audit_event(
+                "webhook_registered", 
+                f"webhook:{webhook_id}",
+                details={"event_type": event_type, "url": url}
+            )
+            
+        return webhook_id
+    
+    def unregister_webhook(self, webhook_id: str) -> bool:
+        """注销WebHook"""
+        if webhook_id in self.webhooks:
+            del self.webhooks[webhook_id]
+            
+            if self.plugin._enterprise_logger:
+                self.plugin._enterprise_logger.log_audit_event(
+                    "webhook_unregistered",
+                    f"webhook:{webhook_id}"
+                )
+            return True
+        return False
+    
+    def trigger_webhook(self, event_type: str, data: Dict):
+        """触发WebHook"""
+        for webhook_id, webhook in self.webhooks.items():
+            if webhook["event_type"] == event_type or webhook["event_type"] == "*":
+                self.webhook_queue.put({
+                    "webhook_id": webhook_id,
+                    "webhook": webhook,
+                    "data": data,
+                    "timestamp": datetime.now().isoformat()
+                })
+    
+    def _process_webhooks(self):
+        """处理WebHook队列"""
+        while self._running:
+            try:
+                webhook_event = self.webhook_queue.get(timeout=1)
+                self._send_webhook(webhook_event)
+            except:
+                continue
+    
+    def _send_webhook(self, webhook_event: Dict):
+        """发送WebHook"""
+        webhook = webhook_event["webhook"]
+        data = webhook_event["data"]
+        
+        payload = {
+            "event_type": webhook["event_type"],
+            "data": data,
+            "timestamp": webhook_event["timestamp"]
+        }
+        
+        headers = webhook["headers"].copy()
+        headers["Content-Type"] = "application/json"
+        
+        # 添加签名（如果有密钥）
+        if webhook.get("secret"):
+            signature = self._generate_signature(webhook["secret"], json.dumps(payload))
+            headers["X-Signature"] = signature
+        
+        # 重试逻辑
+        for attempt in range(webhook["retry_count"]):
+            try:
+                response = requests.post(
+                    webhook["url"],
+                    json=payload,
+                    headers=headers,
+                    timeout=30
+                )
+                
+                if response.status_code < 400:
+                    # 成功
+                    if self.plugin._enterprise_logger:
+                        self.plugin._enterprise_logger.log_business_event(
+                            "webhook_sent",
+                            {
+                                "webhook_id": webhook_event["webhook_id"],
+                                "status_code": response.status_code,
+                                "attempt": attempt + 1
+                            }
+                        )
+                    break
+                else:
+                    raise requests.RequestException(f"HTTP {response.status_code}")
+                    
+            except Exception as e:
+                if attempt == webhook["retry_count"] - 1:
+                    # 最后一次尝试失败
+                    if self.plugin._enterprise_logger:
+                        self.plugin._enterprise_logger.log_error(
+                            "webhook_failed",
+                            str(e),
+                            context={
+                                "webhook_id": webhook_event["webhook_id"],
+                                "url": webhook["url"],
+                                "attempts": attempt + 1
+                            }
+                        )
+                else:
+                    # 等待后重试
+                    time.sleep(2 ** attempt)
+    
+    def _generate_signature(self, secret: str, payload: str) -> str:
+        """生成WebHook签名"""
+        signature = hmac.new(
+            secret.encode('utf-8'),
+            payload.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        return f"sha256={signature}"
+    
+    def list_webhooks(self) -> List[Dict]:
+        """列出所有WebHook"""
+        return [
+            {
+                "webhook_id": webhook_id,
+                "event_type": webhook["event_type"],
+                "url": webhook["url"],
+                "created_time": webhook["created_time"]
+            }
+            for webhook_id, webhook in self.webhooks.items()
+        ]
+
+
 class Cd2Upload(_PluginBase):
     # 插件名称
     plugin_name = "CloudDrive2智能上传"
@@ -388,6 +1074,21 @@ class Cd2Upload(_PluginBase):
     _enable_statistics = True
     _stats_cleanup_days = 30
     _enable_performance_monitoring = True
+    
+    # 企业级功能配置
+    _enable_enterprise_logging = True
+    _enable_distributed_lock = True
+    _enable_quota_management = True
+    _enable_health_check = True
+    _log_retention_days = 30
+    _quota_upload_limit = 1000
+    _quota_window_hours = 24
+    
+    # API和WebHook配置
+    _enable_api = True
+    _enable_webhook = True
+    _api_timeout = 30
+    _webhook_secret = ""
 
     # 链接前缀（用于路径替换）
     _softlink_prefix_path = '/strm/'
@@ -400,6 +1101,11 @@ class Cd2Upload(_PluginBase):
     _cd2_url = {}
     _upload_queue = None
     _statistics = None
+    _enterprise_logger = None
+    _quota_manager = None
+    _health_checker = None
+    _api_handler = None
+    _webhook_manager = None
 
     _subscribe_oper = SubscribeOper()
 
@@ -456,6 +1162,17 @@ class Cd2Upload(_PluginBase):
             self._enable_statistics = config.get('enable_statistics', True)
             self._stats_cleanup_days = config.get('stats_cleanup_days', 30)
             self._enable_performance_monitoring = config.get('enable_performance_monitoring', True)
+            self._enable_enterprise_logging = config.get('enable_enterprise_logging', True)
+            self._enable_distributed_lock = config.get('enable_distributed_lock', True)
+            self._enable_quota_management = config.get('enable_quota_management', True)
+            self._enable_health_check = config.get('enable_health_check', True)
+            self._log_retention_days = config.get('log_retention_days', 30)
+            self._quota_upload_limit = config.get('quota_upload_limit', 1000)
+            self._quota_window_hours = config.get('quota_window_hours', 24)
+            self._enable_api = config.get('enable_api', True)
+            self._enable_webhook = config.get('enable_webhook', True)
+            self._api_timeout = config.get('api_timeout', 30)
+            self._webhook_secret = config.get('webhook_secret', '')
             self._softlink_prefix_path = config.get('softlink_prefix_path', '/strm/')
             self._cd_mount_prefix_path = config.get('cd_mount_prefix_path', '/CloudNAS/CloudDrive/115/emby/')
 
@@ -481,6 +1198,40 @@ class Cd2Upload(_PluginBase):
         if self._enable_statistics:
             self._statistics = UploadStatistics()
             logger.info("统计管理器初始化完成")
+
+        # 初始化企业级日志系统
+        if self._enable_enterprise_logging:
+            self._enterprise_logger = EnterpriseLogger(
+                plugin_name="cd2upload",
+                log_dir=f"logs/enterprise/{self.plugin_name}"
+            )
+            logger.info("企业级日志系统初始化完成")
+
+        # 初始化配额管理器
+        if self._enable_quota_management:
+            self._quota_manager = QuotaManager()
+            self._quota_manager.set_quota(
+                "upload_requests",
+                self._quota_upload_limit,
+                self._quota_window_hours * 3600
+            )
+            logger.info(f"配额管理器初始化完成，上传限制: {self._quota_upload_limit}/{self._quota_window_hours}小时")
+
+        # 初始化健康检查器
+        if self._enable_health_check:
+            self._health_checker = HealthChecker(self)
+            logger.info("健康检查器初始化完成")
+
+        # 初始化API处理器
+        if self._enable_api:
+            self._api_handler = APIHandler(self)
+            logger.info("REST API处理器初始化完成")
+
+        # 初始化WebHook管理器
+        if self._enable_webhook:
+            self._webhook_manager = WebHookManager(self)
+            self._webhook_manager.start()
+            logger.info("WebHook管理器初始化完成")
 
         # 补全历史文件
         file_num = int(os.getenv('FULL_RECENT', '0')) if os.getenv('FULL_RECENT', '0').isdigit() else 0
@@ -535,6 +1286,16 @@ class Cd2Upload(_PluginBase):
             self._scheduler.add_job(func=self._clean_statistics, trigger='interval',
                                     hours=24, name="统计数据清理")
 
+        # 健康检查任务
+        if self._enable_health_check and self._health_checker:
+            self._scheduler.add_job(func=self._perform_health_check, trigger='interval',
+                                    minutes=5, name="健康检查")
+
+        # 企业级日志清理任务
+        if self._enable_enterprise_logging:
+            self._scheduler.add_job(func=self._clean_enterprise_logs, trigger='interval',
+                                    hours=24, name="企业日志清理")
+
         if self._scheduler.get_jobs():
             self._scheduler.print_jobs()
             self._scheduler.start()
@@ -573,6 +1334,17 @@ class Cd2Upload(_PluginBase):
             'enable_statistics': self._enable_statistics,
             'stats_cleanup_days': self._stats_cleanup_days,
             'enable_performance_monitoring': self._enable_performance_monitoring,
+            'enable_enterprise_logging': self._enable_enterprise_logging,
+            'enable_distributed_lock': self._enable_distributed_lock,
+            'enable_quota_management': self._enable_quota_management,
+            'enable_health_check': self._enable_health_check,
+            'log_retention_days': self._log_retention_days,
+            'quota_upload_limit': self._quota_upload_limit,
+            'quota_window_hours': self._quota_window_hours,
+            'enable_api': self._enable_api,
+            'enable_webhook': self._enable_webhook,
+            'api_timeout': self._api_timeout,
+            'webhook_secret': self._webhook_secret,
             'softlink_prefix_path': self._softlink_prefix_path,
             'cd_mount_prefix_path': self._cd_mount_prefix_path
         })
@@ -620,15 +1392,60 @@ class Cd2Upload(_PluginBase):
 
     def task(self, media_info: MediaInfo = None, meta: MetaBase = None):
         start_time = time.time()
-        with (lock):
+        task_id = str(uuid.uuid4())[:8]
+        
+        # 记录业务事件
+        if self._enterprise_logger:
+            self._enterprise_logger.log_business_event(
+                "upload_task_started",
+                {"task_id": task_id, "media_title": media_info.title_year if media_info else "unknown"},
+                file_path=str(len(waiting_process_list)) + " files" if 'waiting_process_list' in locals() else "0 files"
+            )
+        
+        # 使用分布式锁保护关键资源
+        lock_resource = "upload_task_execution"
+        if self._enable_distributed_lock:
+            with DistributedLock(lock_resource, timeout=600):
+                return self._execute_task_with_lock(task_id, media_info, meta, start_time)
+        else:
+            with lock:
+                return self._execute_task_with_lock(task_id, media_info, meta, start_time)
+    
+    def _execute_task_with_lock(self, task_id: str, media_info: MediaInfo = None, meta: MetaBase = None, start_time: float = None):
+        """在锁保护下执行任务"""
+        try:
             waiting_process_list = self.get_data('waiting_process_list') or []
 
             if not waiting_process_list:
                 logger.info('没有需要转移的媒体文件')
+                if self._enterprise_logger:
+                    self._enterprise_logger.log_business_event(
+                        "upload_task_skipped", 
+                        {"task_id": task_id, "reason": "no_files"},
+                        status="INFO"
+                    )
+                return
+                
+            # 检查配额
+            if self._quota_manager and not self._quota_manager.check_quota("upload_requests", len(waiting_process_list)):
+                quota_status = self._quota_manager.get_quota_status("upload_requests")
+                logger.warning(f"上传请求超出配额限制: {quota_status}")
+                if self._enterprise_logger:
+                    self._enterprise_logger.log_business_event(
+                        "upload_quota_exceeded",
+                        {"task_id": task_id, "quota_status": quota_status},
+                        status="WARNING"
+                    )
                 return
                 
             logger.info('开始执行智能上传任务，上传完成后将通知Cloud Media Sync处理')
             logger.info(f'待上传文件列表: {waiting_process_list}')
+            
+            # 记录性能指标
+            if self._enterprise_logger:
+                self._enterprise_logger.log_performance_metric(
+                    "files_in_queue", len(waiting_process_list), "count", {"task_id": task_id}
+                )
             
             # 检查是否启用队列管理
             if self._enable_queue_management and self._upload_queue:
@@ -636,9 +1453,24 @@ class Cd2Upload(_PluginBase):
                 # 清空等待列表，因为已经加入队列
                 self.save_data('waiting_process_list', [])
                 logger.info(f"已将 {len(waiting_process_list)} 个文件加入上传队列")
+                
+                if self._enterprise_logger:
+                    self._enterprise_logger.log_business_event(
+                        "files_queued",
+                        {"task_id": task_id, "count": len(waiting_process_list), "queue_management": True}
+                    )
             else:
                 # 使用传统的直接上传方式
                 self._process_upload_directly(waiting_process_list, media_info, meta, start_time)
+                
+        except Exception as e:
+            if self._enterprise_logger:
+                self._enterprise_logger.log_error(
+                    "task_execution_error", 
+                    str(e),
+                    context={"task_id": task_id, "media_info": media_info.title_year if media_info else None}
+                )
+            raise
 
     def _add_tasks_to_queue(self, file_list: List[str], media_info: MediaInfo = None, meta: MetaBase = None):
         """将文件添加到上传队列"""
@@ -858,6 +1690,15 @@ class Cd2Upload(_PluginBase):
             duration = time.time() - start_time
             if self._statistics:
                 self._statistics.record_upload_result(softlink_source, True, duration, file_size)
+            
+            # 触发WebHook事件
+            if self._webhook_manager:
+                self._webhook_manager.trigger_webhook("upload_success", {
+                    "file_path": softlink_source,
+                    "cd2_dest": cd2_dest,
+                    "file_size": file_size,
+                    "duration": duration
+                })
                 
             return True
         except Exception as e:
@@ -866,6 +1707,16 @@ class Cd2Upload(_PluginBase):
             if self._statistics:
                 error_type = self._classify_error(e).value
                 self._statistics.record_upload_result(softlink_source, False, duration, file_size, error_type)
+            
+            # 触发WebHook事件
+            if self._webhook_manager:
+                self._webhook_manager.trigger_webhook("upload_failed", {
+                    "file_path": softlink_source,
+                    "cd2_dest": cd2_dest,
+                    "error": str(e),
+                    "error_type": self._classify_error(e).value,
+                    "duration": duration
+                })
                 
             logger.error(f"上传文件失败: {e}")
             return False
@@ -1268,6 +2119,206 @@ class Cd2Upload(_PluginBase):
         except Exception as e:
             logger.error(f"获取错误报告失败: {e}")
             return {"error": f"获取错误报告失败: {str(e)}"}
+
+    def _perform_health_check(self):
+        """执行健康检查"""
+        if not self._health_checker:
+            return
+            
+        try:
+            health_status = self._health_checker.check_health()
+            
+            # 记录健康检查结果
+            if self._enterprise_logger:
+                self._enterprise_logger.log_performance_metric(
+                    "health_check_status", 
+                    1 if health_status["overall"] == "healthy" else 0,
+                    "bool",
+                    {"components": health_status.get("failed_components", [])}
+                )
+            
+            # 如果健康状态异常，尝试自愈
+            if health_status["overall"] != "healthy":
+                self._attempt_self_healing(health_status)
+                
+        except Exception as e:
+            logger.error(f"健康检查失败: {e}")
+            if self._enterprise_logger:
+                self._enterprise_logger.log_error("health_check_failed", str(e))
+
+    def _attempt_self_healing(self, health_status: Dict):
+        """尝试自愈机制"""
+        failed_components = health_status.get("failed_components", [])
+        
+        for component in failed_components:
+            try:
+                if component == "queue_health":
+                    self._heal_queue_issues()
+                elif component == "cd2_clients_health":
+                    self._heal_cd2_client_issues()
+                elif component == "storage_health":
+                    self._heal_storage_issues()
+                    
+                if self._enterprise_logger:
+                    self._enterprise_logger.log_business_event(
+                        "self_healing_attempted",
+                        {"component": component, "status": "attempted"}
+                    )
+                    
+            except Exception as e:
+                logger.error(f"自愈组件 {component} 失败: {e}")
+                if self._enterprise_logger:
+                    self._enterprise_logger.log_error(
+                        "self_healing_failed", 
+                        str(e), 
+                        context={"component": component}
+                    )
+
+    def _heal_queue_issues(self):
+        """修复队列问题"""
+        if self._upload_queue:
+            # 清理僵死任务
+            current_time = time.time()
+            for task_path, task in list(self._upload_queue.active_uploads.items()):
+                if current_time - task.created_time > 3600:  # 1小时超时
+                    logger.warning(f"清理超时任务: {task_path}")
+                    self._upload_queue.mark_task_completed(task, False)
+
+    def _heal_cd2_client_issues(self):
+        """修复CD2客户端问题"""
+        if self._cd2_confs:
+            logger.info("尝试重新连接CloudDrive2客户端")
+            self._setup_cd2_clients()
+
+    def _heal_storage_issues(self):
+        """修复存储问题"""
+        # 清理临时文件和失效链接
+        try:
+            self.clean(cleanlink=False)
+            logger.info("执行存储清理操作")
+        except Exception as e:
+            logger.error(f"存储清理失败: {e}")
+
+    def _clean_enterprise_logs(self):
+        """清理企业级日志"""
+        if not self._enterprise_logger:
+            return
+            
+        try:
+            log_dir = self._enterprise_logger.log_dir
+            cutoff_date = datetime.now() - timedelta(days=self._log_retention_days)
+            
+            cleaned_files = 0
+            for log_file in log_dir.glob("*.log*"):
+                if log_file.stat().st_mtime < cutoff_date.timestamp():
+                    log_file.unlink()
+                    cleaned_files += 1
+                    
+            if cleaned_files > 0:
+                logger.info(f"清理了 {cleaned_files} 个过期日志文件")
+                
+                if self._enterprise_logger:
+                    self._enterprise_logger.log_business_event(
+                        "logs_cleaned",
+                        {"cleaned_files": cleaned_files, "retention_days": self._log_retention_days}
+                    )
+                    
+        except Exception as e:
+            logger.error(f"清理企业日志失败: {e}")
+
+    def get_enterprise_status(self) -> Dict:
+        """获取企业级状态总览"""
+        try:
+            status = {
+                "plugin_info": {
+                    "name": self.plugin_name,
+                    "version": self.plugin_version,
+                    "session_id": self._enterprise_logger.session_id if self._enterprise_logger else "N/A"
+                },
+                "health": self._health_checker.check_health() if self._health_checker else {"status": "disabled"},
+                "quota_status": {},
+                "performance_summary": self.get_performance_metrics(),
+                "enterprise_features": {
+                    "enterprise_logging": self._enable_enterprise_logging,
+                    "distributed_lock": self._enable_distributed_lock,
+                    "quota_management": self._enable_quota_management,
+                    "health_check": self._enable_health_check
+                }
+            }
+            
+            # 添加配额状态
+            if self._quota_manager:
+                status["quota_status"] = self._quota_manager.get_quota_status("upload_requests")
+            
+            return status
+            
+        except Exception as e:
+            return {"error": f"获取企业状态失败: {str(e)}"}
+
+    def get_audit_trail(self, hours: int = 24) -> Dict:
+        """获取审计跟踪"""
+        if not self._enterprise_logger:
+            return {"error": "企业级日志未启用"}
+            
+        try:
+            # 这里应该从日志文件中解析审计记录
+            # 简化实现，返回基本信息
+            return {
+                "time_range": f"最近 {hours} 小时",
+                "log_files": {
+                    "business": str(self._enterprise_logger.log_dir / f"{self._enterprise_logger.plugin_name}_business.log"),
+                    "audit": str(self._enterprise_logger.log_dir / f"{self._enterprise_logger.plugin_name}_audit.log"),
+                    "performance": str(self._enterprise_logger.log_dir / f"{self._enterprise_logger.plugin_name}_performance.log"),
+                    "error": str(self._enterprise_logger.log_dir / f"{self._enterprise_logger.plugin_name}_error.log")
+                },
+                "session_id": self._enterprise_logger.session_id
+            }
+            
+        except Exception as e:
+            return {"error": f"获取审计跟踪失败: {str(e)}"}
+
+    def handle_api_request(self, path: str, method: str = "GET", params: Dict = None, headers: Dict = None) -> Dict:
+        """处理API请求（供外部调用）"""
+        if not self._api_handler:
+            return {"error": "API功能未启用", "code": 503}
+            
+        return self._api_handler.handle_request(path, method, params, headers)
+
+    def register_webhook(self, event_type: str, url: str, secret: str = None, headers: Dict = None) -> str:
+        """注册WebHook（供外部调用）"""
+        if not self._webhook_manager:
+            raise RuntimeError("WebHook功能未启用")
+            
+        return self._webhook_manager.register_webhook(event_type, url, secret, headers)
+
+    def unregister_webhook(self, webhook_id: str) -> bool:
+        """注销WebHook"""
+        if not self._webhook_manager:
+            return False
+            
+        return self._webhook_manager.unregister_webhook(webhook_id)
+
+    def list_webhooks(self) -> List[Dict]:
+        """列出WebHook"""
+        if not self._webhook_manager:
+            return []
+            
+        return self._webhook_manager.list_webhooks()
+
+    def stop_service(self):
+        """停止服务"""
+        try:
+            if self._scheduler:
+                self._scheduler.shutdown()
+                self._scheduler = None
+            
+            if self._webhook_manager:
+                self._webhook_manager.stop()
+                self._webhook_manager = None
+                
+            logger.info("CloudDrive2智能上传服务已停止")
+        except Exception as e:
+            logger.error(f"停止服务时出错: {e}")
 
     def _send_notification(self, title: str, text: str = None, image: str = None):
         """发送通知，支持通知渠道选择"""
@@ -1947,6 +2998,211 @@ class Cd2Upload(_PluginBase):
                                         'props': {
                                             'model': 'enable_performance_monitoring',
                                             'label': '启用性能监控',
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enable_enterprise_logging',
+                                            'label': '企业级日志',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enable_distributed_lock',
+                                            'label': '分布式锁',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enable_quota_management',
+                                            'label': '配额管理',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enable_health_check',
+                                            'label': '健康检查',
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'quota_upload_limit',
+                                            'label': '上传配额限制',
+                                            'placeholder': '1000',
+                                            'type': 'number'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'quota_window_hours',
+                                            'label': '配额窗口(小时)',
+                                            'placeholder': '24',
+                                            'type': 'number'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'log_retention_days',
+                                            'label': '日志保留天数',
+                                            'placeholder': '30',
+                                            'type': 'number'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enable_api',
+                                            'label': '启用REST API',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enable_webhook',
+                                            'label': '启用WebHook',
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'api_timeout',
+                                            'label': 'API超时时间(秒)',
+                                            'placeholder': '30',
+                                            'type': 'number'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'webhook_secret',
+                                            'label': 'WebHook密钥',
+                                            'placeholder': '用于签名验证的密钥'
                                         }
                                     }
                                 ]
