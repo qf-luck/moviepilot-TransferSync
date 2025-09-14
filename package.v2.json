@@ -10,5 +10,18 @@
     "history": {
       "v1.1": "初始版本，支持CloudDrive2上传任务监控、Cookie过期检测、系统信息查看、云下载功能"
     }
+  },
+  "Cd2Upload": {
+    "name": "CloudDrive2智能上传",
+    "description": "智能上传媒体文件到CloudDrive2，支持上传监控、任务管理、事件驱动的STRM生成，整合cd2tool功能",
+    "labels": "CloudDrive2,上传,STRM,智能,监控,事件驱动",
+    "version": "2.0.0",
+    "icon": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png",
+    "author": "honue & enhanced",
+    "level": 1,
+    "v2": true,
+    "history": {
+      "v2.0.0": "重大更新：整合cd2tool功能，添加上传任务监控、失败通知、事件驱动STRM生成、多CD2实例支持、智能重试机制"
+    }
   }
 }
