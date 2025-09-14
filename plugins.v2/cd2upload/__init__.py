@@ -2484,8 +2484,92 @@ class Cd2Upload(_PluginBase):
             {
                 'component': 'VForm',
                 'content': [
+                    # 企业级Header
+                    {
+                        'component': 'VCard',
+                        'props': {
+                            'variant': 'outlined',
+                            'class': 'mb-4 enterprise-header-card'
+                        },
+                        'content': [
+                            {
+                                'component': 'VCardItem',
+                                'content': [
+                                    {
+                                        'component': 'VCardTitle',
+                                        'props': {
+                                            'class': 'd-flex align-center'
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VIcon',
+                                                'props': {
+                                                    'icon': 'mdi-cloud-upload',
+                                                    'class': 'me-3',
+                                                    'color': 'primary',
+                                                    'size': 'large'
+                                                }
+                                            },
+                                            {
+                                                'component': 'div',
+                                                'props': {
+                                                    'class': 'text-h5'
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'span',
+                                                        'text': 'CloudDrive2 智能上传'
+                                                    },
+                                                    {
+                                                        'component': 'VChip',
+                                                        'props': {
+                                                            'size': 'small',
+                                                            'color': 'success',
+                                                            'variant': 'flat',
+                                                            'class': 'ms-3'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'VIcon',
+                                                                'props': {
+                                                                    'icon': 'mdi-crown',
+                                                                    'start': True,
+                                                                    'size': 'small'
+                                                                }
+                                                            },
+                                                            {
+                                                                'component': 'span',
+                                                                'text': 'Enterprise'
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VCardSubtitle',
+                                        'props': {
+                                            'class': 'mt-2 text-medium-emphasis'
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'span',
+                                                'text': '企业级文件上传管理系统 | 队列管理 | 健康监控 | API集成 | 实时统计'
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    
+                    # 快速操作面板
                     {
                         'component': 'VRow',
+                        'props': {
+                            'class': 'mb-4'
+                        },
                         'content': [
                             {
                                 'component': 'VCol',
@@ -2499,6 +2583,8 @@ class Cd2Upload(_PluginBase):
                                         'props': {
                                             'model': 'enable',
                                             'label': '启用插件',
+                                            'color': 'primary',
+                                            'hide-details': True
                                         }
                                     }
                                 ]
@@ -2515,10 +2601,13 @@ class Cd2Upload(_PluginBase):
                                         'props': {
                                             'model': 'onlyonce',
                                             'label': '立即运行一次',
+                                            'color': 'warning',
+                                            'hide-details': True
                                         }
                                     }
                                 ]
-                            }, {
+                            },
+                            {
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
@@ -2529,11 +2618,14 @@ class Cd2Upload(_PluginBase):
                                         'component': 'VSwitch',
                                         'props': {
                                             'model': 'cleanlink',
-                                            'label': '立即清理生成',
+                                            'label': '立即清理',
+                                            'color': 'error',
+                                            'hide-details': True
                                         }
                                     }
                                 ]
-                            }, {
+                            },
+                            {
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
@@ -2544,22 +2636,30 @@ class Cd2Upload(_PluginBase):
                                         'component': 'VTextField',
                                         'props': {
                                             'model': 'cron',
-                                            'label': '追更剧集入库（分钟）后上传',
-                                            'placeholder': '20'
+                                            'label': '延迟上传（分钟）',
+                                            'placeholder': '20',
+                                            'variant': 'outlined',
+                                            'type': 'number',
+                                            'hide-details': True
                                         }
                                     }
                                 ]
                             }
                         ]
                     },
+                    
+                    # 基本路径配置
                     {
                         'component': 'VRow',
+                        'props': {
+                            'class': 'mb-4'
+                        },
                         'content': [
                             {
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
-                                    'md': 4
+                                    'md': 6
                                 },
                                 'content': [
                                     {
@@ -2567,15 +2667,19 @@ class Cd2Upload(_PluginBase):
                                         'props': {
                                             'model': 'softlink_prefix_path',
                                             'label': '本地软链接路径前缀',
-                                            'placeholder': '/strm/'
+                                            'placeholder': '/strm/',
+                                            'variant': 'outlined',
+                                            'hide-details': True,
+                                            'prepend-inner-icon': 'mdi-folder-open'
                                         }
                                     }
                                 ]
-                            }, {
+                            },
+                            {
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
-                                    'md': 4
+                                    'md': 6
                                 },
                                 'content': [
                                     {
@@ -2583,691 +2687,492 @@ class Cd2Upload(_PluginBase):
                                         'props': {
                                             'model': 'cd_mount_prefix_path',
                                             'label': 'CloudDrive2挂载路径前缀',
-                                            'placeholder': '/CloudNAS/115/emby/'
+                                            'placeholder': '/CloudNAS/115/emby/',
+                                            'variant': 'outlined',
+                                            'hide-details': True,
+                                            'prepend-inner-icon': 'mdi-cloud'
                                         }
                                     }
                                 ]
                             }
                         ]
                     },
+                    
+                    # 配置面板组
                     {
-                        'component': 'VRow',
+                        'component': 'VExpansionPanels',
+                        'props': {
+                            'multiple': True,
+                            'variant': 'accordion',
+                            'class': 'enterprise-panels'
+                        },
                         'content': [
+                            # 监控配置
                             {
-                                'component': 'VCol',
+                                'component': 'VExpansionPanel',
                                 'props': {
-                                    'cols': 12,
-                                    'md': 3
+                                    'value': 'monitoring'
                                 },
                                 'content': [
                                     {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'monitor_upload',
-                                            'label': '监控上传任务',
-                                        }
+                                        'component': 'VExpansionPanelTitle',
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'props': {
+                                                    'class': 'd-flex align-center'
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VIcon',
+                                                        'props': {
+                                                            'icon': 'mdi-monitor',
+                                                            'class': 'me-3',
+                                                            'color': 'info'
+                                                        }
+                                                    },
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-h6'
+                                                        },
+                                                        'text': '监控配置'
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VExpansionPanelText',
+                                        'content': [
+                                            {
+                                                'component': 'VRow',
+                                                'content': [
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4},
+                                                        'content': [{
+                                                            'component': 'VSwitch',
+                                                            'props': {
+                                                                'model': 'monitor_upload',
+                                                                'label': '开启上传监控',
+                                                                'color': 'success',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4},
+                                                        'content': [{
+                                                            'component': 'VSwitch',
+                                                            'props': {
+                                                                'model': 'notify_upload',
+                                                                'label': '上传通知',
+                                                                'color': 'warning',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4},
+                                                        'content': [{
+                                                            'component': 'VSwitch',
+                                                            'props': {
+                                                                'model': 'enable_favorite_notify',
+                                                                'label': '收藏通知',
+                                                                'color': 'error',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VRow',
+                                                'content': [
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 6},
+                                                        'content': [{
+                                                            'component': 'VTextField',
+                                                            'props': {
+                                                                'model': 'monitor_interval',
+                                                                'label': '监控间隔（分钟）',
+                                                                'placeholder': '10',
+                                                                'variant': 'outlined',
+                                                                'type': 'number',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 6},
+                                                        'content': [{
+                                                            'component': 'VTextField',
+                                                            'props': {
+                                                                'model': 'clean_interval',
+                                                                'label': '清理间隔（分钟）',
+                                                                'placeholder': '60',
+                                                                'variant': 'outlined',
+                                                                'type': 'number',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     }
                                 ]
                             },
+                            
+                            # 上传配置
                             {
-                                'component': 'VCol',
+                                'component': 'VExpansionPanel',
                                 'props': {
-                                    'cols': 12,
-                                    'md': 3
+                                    'value': 'upload'
                                 },
                                 'content': [
                                     {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'notify_upload',
-                                            'label': '上传失败通知',
-                                        }
+                                        'component': 'VExpansionPanelTitle',
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'props': {
+                                                    'class': 'd-flex align-center'
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VIcon',
+                                                        'props': {
+                                                            'icon': 'mdi-upload',
+                                                            'class': 'me-3',
+                                                            'color': 'success'
+                                                        }
+                                                    },
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-h6'
+                                                        },
+                                                        'text': '上传配置'
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VExpansionPanelText',
+                                        'content': [
+                                            {
+                                                'component': 'VRow',
+                                                'content': [
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 3},
+                                                        'content': [{
+                                                            'component': 'VTextField',
+                                                            'props': {
+                                                                'model': 'upload_timeout',
+                                                                'label': '上传超时（分钟）',
+                                                                'placeholder': '60',
+                                                                'variant': 'outlined',
+                                                                'type': 'number',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 3},
+                                                        'content': [{
+                                                            'component': 'VTextField',
+                                                            'props': {
+                                                                'model': 'upload_retry_count',
+                                                                'label': '重试次数',
+                                                                'placeholder': '3',
+                                                                'variant': 'outlined',
+                                                                'type': 'number',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 3},
+                                                        'content': [{
+                                                            'component': 'VSwitch',
+                                                            'props': {
+                                                                'model': 'delete_source_after_upload',
+                                                                'label': '删除源文件',
+                                                                'color': 'error',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 3},
+                                                        'content': [{
+                                                            'component': 'VSwitch',
+                                                            'props': {
+                                                                'model': 'enable_cookie_check',
+                                                                'label': 'Cookie检测',
+                                                                'color': 'warning',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     }
                                 ]
                             },
+                            
+                            # 企业级功能
                             {
-                                'component': 'VCol',
+                                'component': 'VExpansionPanel',
                                 'props': {
-                                    'cols': 12,
-                                    'md': 3
+                                    'value': 'enterprise'
                                 },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'upload_retry_count',
-                                            'label': '上传重试次数',
-                                            'placeholder': '3'
-                                        }
+                                        'component': 'VExpansionPanelTitle',
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'props': {
+                                                    'class': 'd-flex align-center'
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VIcon',
+                                                        'props': {
+                                                            'icon': 'mdi-crown',
+                                                            'class': 'me-3',
+                                                            'color': 'warning'
+                                                        }
+                                                    },
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-h6'
+                                                        },
+                                                        'text': '企业级功能'
+                                                    },
+                                                    {
+                                                        'component': 'VChip',
+                                                        'props': {
+                                                            'size': 'small',
+                                                            'color': 'warning',
+                                                            'variant': 'flat',
+                                                            'class': 'ms-3'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'span',
+                                                                'text': 'Enterprise'
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VExpansionPanelText',
+                                        'content': [
+                                            {
+                                                'component': 'VRow',
+                                                'content': [
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4},
+                                                        'content': [{
+                                                            'component': 'VSwitch',
+                                                            'props': {
+                                                                'model': 'enable_enterprise_logging',
+                                                                'label': '企业级日志',
+                                                                'color': 'primary',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4},
+                                                        'content': [{
+                                                            'component': 'VSwitch',
+                                                            'props': {
+                                                                'model': 'enable_distributed_lock',
+                                                                'label': '分布式锁',
+                                                                'color': 'success',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4},
+                                                        'content': [{
+                                                            'component': 'VSwitch',
+                                                            'props': {
+                                                                'model': 'enable_health_check',
+                                                                'label': '健康检查',
+                                                                'color': 'info',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VRow',
+                                                'content': [
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4},
+                                                        'content': [{
+                                                            'component': 'VSwitch',
+                                                            'props': {
+                                                                'model': 'enable_quota_management',
+                                                                'label': '配额管理',
+                                                                'color': 'warning',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4},
+                                                        'content': [{
+                                                            'component': 'VSwitch',
+                                                            'props': {
+                                                                'model': 'enable_api_handler',
+                                                                'label': 'REST API',
+                                                                'color': 'error',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 4},
+                                                        'content': [{
+                                                            'component': 'VSwitch',
+                                                            'props': {
+                                                                'model': 'enable_webhook_manager',
+                                                                'label': 'WebHook',
+                                                                'color': 'deep-purple',
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     }
                                 ]
                             },
+                            
+                            # 高级配置
                             {
-                                'component': 'VCol',
+                                'component': 'VExpansionPanel',
                                 'props': {
-                                    'cols': 12,
-                                    'md': 3
+                                    'value': 'advanced'
                                 },
                                 'content': [
                                     {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'cloud_media_sync',
-                                            'label': '通知Cloud Media Sync',
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
+                                        'component': 'VExpansionPanelTitle',
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'props': {
+                                                    'class': 'd-flex align-center'
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VIcon',
+                                                        'props': {
+                                                            'icon': 'mdi-cogs',
+                                                            'class': 'me-3',
+                                                            'color': 'deep-purple'
+                                                        }
+                                                    },
+                                                    {
+                                                        'component': 'span',
+                                                        'props': {
+                                                            'class': 'text-h6'
+                                                        },
+                                                        'text': '高级配置'
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
                                     {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_cookie_check',
-                                            'label': '启用Cookie检测',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'delete_source_after_upload',
-                                            'label': '上传后删除源文件',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_favorite_notify',
-                                            'label': '启用收藏通知',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'monitor_interval',
-                                            'label': '监控间隔(分钟)',
-                                            'placeholder': '10'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'clean_interval',
-                                            'label': '清理间隔(分钟)',
-                                            'placeholder': '20'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'cookie_check_interval',
-                                            'label': 'Cookie检测间隔(分钟)',
-                                            'placeholder': '30'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'upload_timeout',
-                                            'label': '上传超时(秒)',
-                                            'placeholder': '300'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'black_dirs',
-                                            'label': 'Cookie检测黑名单',
-                                            'placeholder': '目录1,目录2'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_queue_management',
-                                            'label': '启用队列管理',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'max_concurrent_uploads',
-                                            'label': '最大并发上传数',
-                                            'placeholder': '3',
-                                            'type': 'number'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'queue_check_interval',
-                                            'label': '队列检查间隔(秒)',
-                                            'placeholder': '5',
-                                            'type': 'number'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_progress_notify',
-                                            'label': '启用进度通知',
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_smart_retry',
-                                            'label': '启用智能重试',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'max_retry_attempts',
-                                            'label': '最大重试次数',
-                                            'placeholder': '5',
-                                            'type': 'number'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'retry_max_delay',
-                                            'label': '最大重试延迟(秒)',
-                                            'placeholder': '300',
-                                            'type': 'number'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_jitter',
-                                            'label': '启用抖动避让',
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_statistics',
-                                            'label': '启用统计功能',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'stats_cleanup_days',
-                                            'label': '统计数据保留天数',
-                                            'placeholder': '30',
-                                            'type': 'number'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_performance_monitoring',
-                                            'label': '启用性能监控',
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_enterprise_logging',
-                                            'label': '企业级日志',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_distributed_lock',
-                                            'label': '分布式锁',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_quota_management',
-                                            'label': '配额管理',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_health_check',
-                                            'label': '健康检查',
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'quota_upload_limit',
-                                            'label': '上传配额限制',
-                                            'placeholder': '1000',
-                                            'type': 'number'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'quota_window_hours',
-                                            'label': '配额窗口(小时)',
-                                            'placeholder': '24',
-                                            'type': 'number'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'log_retention_days',
-                                            'label': '日志保留天数',
-                                            'placeholder': '30',
-                                            'type': 'number'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_api',
-                                            'label': '启用REST API',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enable_webhook',
-                                            'label': '启用WebHook',
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'api_timeout',
-                                            'label': 'API超时时间(秒)',
-                                            'placeholder': '30',
-                                            'type': 'number'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'webhook_secret',
-                                            'label': 'WebHook密钥',
-                                            'placeholder': '用于签名验证的密钥'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextarea',
-                                        'props': {
-                                            'model': 'cd2_confs',
-                                            'label': 'CloudDrive2配置',
-                                            'rows': 3,
-                                            'placeholder': 'cd2配置1#http://127.0.0.1:19798#admin#123456\\n（一行一个配置）'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'success',
-                                            'variant': 'tonal',
-                                            'text': '路径配置说明：本地软链接路径前缀用于识别需要上传的文件，CloudDrive2挂载路径前缀用于生成云盘访问路径，两个路径通过替换关系建立本地到云盘的映射关系。'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'info',
-                                            'variant': 'tonal',
-                                            'text': '【CloudDrive2智能上传】专注于文件上传和监控管理，上传完成后通知Cloud Media Sync插件处理后续的STRM生成等文件管理任务，实现功能解耦和专业分工。'
-                                        }
+                                        'component': 'VExpansionPanelText',
+                                        'content': [
+                                            {
+                                                'component': 'VRow',
+                                                'content': [
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 6},
+                                                        'content': [{
+                                                            'component': 'VTextarea',
+                                                            'props': {
+                                                                'model': 'cd2_confs',
+                                                                'label': 'CloudDrive2配置',
+                                                                'placeholder': 'host: http://ip:19798\nusername: admin\npassword: passwd\nsavepath: /home/media\nuploadpath: CD2Upload\nrootpath: 115\n\n---\n#组2配置...',
+                                                                'variant': 'outlined',
+                                                                'rows': 6,
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    },
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12, 'md': 6},
+                                                        'content': [{
+                                                            'component': 'VTextarea',
+                                                            'props': {
+                                                                'model': 'black_dirs',
+                                                                'label': '过滤目录',
+                                                                'placeholder': '每行一个目录，支持正则表达式\n例如：\n.*\\.tmp$\n/temp/\n.*test.*',
+                                                                'variant': 'outlined',
+                                                                'rows': 6,
+                                                                'hide-details': True
+                                                            }
+                                                        }]
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VRow',
+                                                'content': [
+                                                    {
+                                                        'component': 'VCol',
+                                                        'props': {'cols': 12},
+                                                        'content': [{
+                                                            'component': 'VTextField',
+                                                            'props': {
+                                                                'model': 'cloud_media_sync',
+                                                                'label': 'Cloud Media Sync插件ID',
+                                                                'placeholder': '请在Cloud Media Sync插件中查看其Plugin ID',
+                                                                'variant': 'outlined',
+                                                                'hide-details': True,
+                                                                'prepend-inner-icon': 'mdi-link'
+                                                            }
+                                                        }]
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     }
                                 ]
                             }
@@ -3294,7 +3199,14 @@ class Cd2Upload(_PluginBase):
             'delete_source_after_upload': self._delete_source_after_upload,
             'enable_favorite_notify': self._enable_favorite_notify,
             'softlink_prefix_path': self._softlink_prefix_path,
-            'cd_mount_prefix_path': self._cd_mount_prefix_path
+            'cd_mount_prefix_path': self._cd_mount_prefix_path,
+            # 企业级配置项
+            'enable_enterprise_logging': getattr(self, '_enable_enterprise_logging', True),
+            'enable_distributed_lock': getattr(self, '_enable_distributed_lock', True),
+            'enable_health_check': getattr(self, '_enable_health_check', True),
+            'enable_quota_management': getattr(self, '_enable_quota_management', True),
+            'enable_api_handler': getattr(self, '_enable_api_handler', True),
+            'enable_webhook_manager': getattr(self, '_enable_webhook_manager', True)
         }
 
     def get_api(self) -> List[Dict[str, Any]]:
