@@ -214,6 +214,176 @@ class UploadQueue:
                 self.failed_uploads = self.failed_uploads[-50:]
 
 
+class SmartPathManager:
+    """智能路径管理器"""
+    
+    def __init__(self, logger):
+        self.logger = logger
+        
+    def get_smart_mapping(self, local_path: str, cloud_path: str, mode: str = 'media') -> dict:
+        """
+        生成智能路径映射配置
+        
+        Args:
+            local_path: 本地路径
+            cloud_path: 云端路径
+            mode: 配置模式 ('media', 'general', 'custom')
+            
+        Returns:
+            包含路径前缀的映射配置
+        """
+        try:
+            # 标准化路径格式
+            local_path = self._normalize_path(local_path)
+            cloud_path = self._normalize_path(cloud_path)
+            
+            if mode == 'media':
+                return self._generate_media_mapping(local_path, cloud_path)
+            elif mode == 'general':
+                return self._generate_general_mapping(local_path, cloud_path)
+            else:
+                return self._generate_custom_mapping(local_path, cloud_path)
+                
+        except Exception as e:
+            self.logger.error(f"生成智能路径映射失败: {str(e)}")
+            return {'softlink_prefix': local_path, 'mount_prefix': cloud_path}
+    
+    def _normalize_path(self, path: str) -> str:
+        """标准化路径格式"""
+        if not path:
+            return ""
+            
+        # 处理Windows路径
+        path = path.replace('\\', '/')
+        
+        # 确保以/结尾
+        if not path.endswith('/'):
+            path += '/'
+            
+        # 确保以/开头（除非是Windows驱动器路径）
+        if not path.startswith('/') and ':' not in path:
+            path = '/' + path
+            
+        return path
+    
+    def _generate_media_mapping(self, local_path: str, cloud_path: str) -> dict:
+        """生成影视媒体库映射"""
+        return {
+            'softlink_prefix': local_path,
+            'mount_prefix': cloud_path,
+            'description': f'影视媒体库映射: {local_path} -> {cloud_path}'
+        }
+    
+    def _generate_general_mapping(self, local_path: str, cloud_path: str) -> dict:
+        """生成通用文件同步映射"""
+        return {
+            'softlink_prefix': local_path,
+            'mount_prefix': cloud_path,
+            'description': f'通用文件同步: {local_path} -> {cloud_path}'
+        }
+    
+    def _generate_custom_mapping(self, local_path: str, cloud_path: str) -> dict:
+        """生成自定义映射"""
+        return {
+            'softlink_prefix': local_path,
+            'mount_prefix': cloud_path,
+            'description': f'自定义路径映射: {local_path} -> {cloud_path}'
+        }
+    
+    def preview_path_conversion(self, file_path: str, local_prefix: str, cloud_prefix: str) -> dict:
+        """
+        预览路径转换结果
+        
+        Args:
+            file_path: 示例文件路径
+            local_prefix: 本地路径前缀
+            cloud_prefix: 云端路径前缀
+            
+        Returns:
+            包含转换前后路径的预览结果
+        """
+        try:
+            if not file_path.startswith(local_prefix):
+                return {
+                    'success': False,
+                    'error': f'文件路径不匹配本地前缀: {file_path}'
+                }
+            
+            # 提取相对路径
+            relative_path = file_path[len(local_prefix):]
+            if relative_path.startswith('/'):
+                relative_path = relative_path[1:]
+            
+            # 生成云端路径
+            cloud_file_path = cloud_prefix + relative_path
+            
+            return {
+                'success': True,
+                'original_path': file_path,
+                'cloud_path': cloud_file_path,
+                'relative_path': relative_path
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f'路径转换预览失败: {str(e)}'
+            }
+    
+    def detect_local_media_paths(self) -> list:
+        """
+        自动检测本地媒体路径
+        """
+        common_media_paths = [
+            '/media', '/mnt/media', '/home/media', '/opt/media',
+            '/volume1/media', '/volume2/media',  # Synology
+            'D:/Movies', 'E:/Movies', 'F:/Movies',  # Windows
+            'D:/Media', 'E:/Media', 'F:/Media',
+            '/movies', '/tv', '/downloads'
+        ]
+        
+        detected_paths = []
+        for path in common_media_paths:
+            if os.path.exists(path) and os.path.isdir(path):
+                detected_paths.append({
+                    'path': path,
+                    'size': self._get_directory_size(path),
+                    'file_count': self._get_file_count(path)
+                })
+        
+        return detected_paths
+    
+    def _get_directory_size(self, path: str) -> str:
+        """获取目录大小"""
+        try:
+            total_size = 0
+            for dirpath, dirnames, filenames in os.walk(path):
+                for filename in filenames:
+                    filepath = os.path.join(dirpath, filename)
+                    if os.path.exists(filepath):
+                        total_size += os.path.getsize(filepath)
+            
+            # 转换为人类可读格式
+            for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+                if total_size < 1024.0:
+                    return f"{total_size:.1f} {unit}"
+                total_size /= 1024.0
+            return f"{total_size:.1f} PB"
+            
+        except Exception:
+            return "未知"
+    
+    def _get_file_count(self, path: str) -> int:
+        """获取文件数量"""
+        try:
+            count = 0
+            for _, _, filenames in os.walk(path):
+                count += len(filenames)
+            return count
+        except Exception:
+            return 0
+
+
 class UploadStatistics:
     """上传统计管理器"""
     
@@ -1175,6 +1345,10 @@ class Cd2Upload(_PluginBase):
             self._webhook_secret = config.get('webhook_secret', '')
             self._softlink_prefix_path = config.get('softlink_prefix_path', '/strm/')
             self._cd_mount_prefix_path = config.get('cd_mount_prefix_path', '/CloudNAS/CloudDrive/115/emby/')
+            # 智能路径配置
+            self._path_config_mode = config.get('path_config_mode', 'media')
+            self._local_media_path = config.get('local_media_path', '')
+            self._cloud_media_path = config.get('cloud_media_path', '')
 
         self.stop_service()
 
@@ -1232,6 +1406,10 @@ class Cd2Upload(_PluginBase):
             self._webhook_manager = WebHookManager(self)
             self._webhook_manager.start()
             logger.info("WebHook管理器初始化完成")
+
+        # 初始化智能路径管理器
+        self._smart_path_manager = SmartPathManager(logger)
+        logger.info("智能路径管理器初始化完成")
 
         # 补全历史文件
         file_num = int(os.getenv('FULL_RECENT', '0')) if os.getenv('FULL_RECENT', '0').isdigit() else 0
@@ -1526,8 +1704,8 @@ class Cd2Upload(_PluginBase):
         
         process_list = waiting_process_list.copy()
         for index, softlink_source in enumerate(waiting_process_list):
-            # 链接目录前缀 替换为 cd2挂载前缀
-            cd2_dest = softlink_source.replace(self._softlink_prefix_path, self._cd_mount_prefix_path)
+            # 使用智能路径转换
+            cd2_dest = self._get_cloud_destination_path(softlink_source)
             
             # 记录当前进度
             current_progress = index + 1
@@ -1588,6 +1766,42 @@ class Cd2Upload(_PluginBase):
         """判断错误是否可重试"""
         non_retryable = {ErrorType.PERMISSION_ERROR, ErrorType.FILE_NOT_FOUND}
         return error_type not in non_retryable
+
+    def _get_cloud_destination_path(self, local_file_path: str) -> str:
+        """
+        智能获取云端目标路径
+        
+        Args:
+            local_file_path: 本地文件路径
+            
+        Returns:
+            云端目标路径
+        """
+        try:
+            # 优先使用智能路径配置
+            if self._local_media_path and self._cloud_media_path:
+                if local_file_path.startswith(self._local_media_path):
+                    # 提取相对路径
+                    relative_path = local_file_path[len(self._local_media_path):].lstrip('/')
+                    # 生成云端路径
+                    cloud_path = os.path.join(self._cloud_media_path, relative_path).replace('\\', '/')
+                    logger.debug(f"智能路径转换: {local_file_path} -> {cloud_path}")
+                    return cloud_path
+            
+            # 回退到传统的前缀替换方式
+            if self._softlink_prefix_path and self._cd_mount_prefix_path:
+                cloud_path = local_file_path.replace(self._softlink_prefix_path, self._cd_mount_prefix_path)
+                logger.debug(f"传统路径转换: {local_file_path} -> {cloud_path}")
+                return cloud_path
+            
+            # 如果没有配置路径映射，直接返回原路径
+            logger.warning(f"未配置路径映射，使用原路径: {local_file_path}")
+            return local_file_path
+            
+        except Exception as e:
+            logger.error(f"路径转换失败: {str(e)}")
+            # 发生错误时回退到传统方式
+            return local_file_path.replace(self._softlink_prefix_path or '', self._cd_mount_prefix_path or '')
 
     def _calculate_retry_delay(self, attempt: int) -> float:
         """计算重试延迟时间（智能退避算法）"""
@@ -2648,50 +2862,337 @@ class Cd2Upload(_PluginBase):
                         ]
                     },
                     
-                    # 基本路径配置
+                    # 智能路径配置向导
                     {
-                        'component': 'VRow',
+                        'component': 'VCard',
                         'props': {
-                            'class': 'mb-4'
+                            'variant': 'outlined',
+                            'class': 'mb-4 path-config-wizard'
                         },
                         'content': [
                             {
-                                'component': 'VCol',
+                                'component': 'VCardTitle',
                                 'props': {
-                                    'cols': 12,
-                                    'md': 6
+                                    'class': 'd-flex align-center'
                                 },
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VIcon',
                                         'props': {
-                                            'model': 'softlink_prefix_path',
-                                            'label': '本地软链接路径前缀',
-                                            'placeholder': '/strm/',
-                                            'variant': 'outlined',
-                                            'hide-details': True,
-                                            'prepend-inner-icon': 'mdi-folder-open'
+                                            'icon': 'mdi-map-marker-path',
+                                            'class': 'me-3',
+                                            'color': 'success'
                                         }
+                                    },
+                                    {
+                                        'component': 'span',
+                                        'text': '智能路径配置向导'
+                                    },
+                                    {
+                                        'component': 'VSpacer'
+                                    },
+                                    {
+                                        'component': 'VChip',
+                                        'props': {
+                                            'size': 'small',
+                                            'color': 'success',
+                                            'variant': 'flat'
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VIcon',
+                                                'props': {
+                                                    'icon': 'mdi-auto-fix',
+                                                    'start': True,
+                                                    'size': 'small'
+                                                }
+                                            },
+                                            {
+                                                'component': 'span',
+                                                'text': '傻瓜模式'
+                                            }
+                                        ]
                                     }
                                 ]
                             },
                             {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
+                                'component': 'VCardText',
                                 'content': [
+                                    # 使用场景选择
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VRow',
                                         'props': {
-                                            'model': 'cd_mount_prefix_path',
-                                            'label': 'CloudDrive2挂载路径前缀',
-                                            'placeholder': '/CloudNAS/115/emby/',
+                                            'class': 'mb-3'
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VSelect',
+                                                        'props': {
+                                                            'model': 'path_config_mode',
+                                                            'label': '选择你的使用场景',
+                                                            'items': [
+                                                                {'title': '🎬 影视媒体库 (推荐)', 'value': 'media'},
+                                                                {'title': '📁 通用文件同步', 'value': 'general'},
+                                                                {'title': '🔧 自定义路径配置', 'value': 'custom'}
+                                                            ],
+                                                            'variant': 'outlined',
+                                                            'prepend-inner-icon': 'mdi-format-list-bulleted',
+                                                            'hide-details': True
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    
+                                    # 智能路径示例和说明
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'type': 'info',
+                                            'variant': 'tonal',
+                                            'class': 'mb-3'
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'div',
+                                                'props': {
+                                                    'class': 'text-subtitle-2 mb-2'
+                                                },
+                                                'text': '💡 工作原理说明'
+                                            },
+                                            {
+                                                'component': 'div',
+                                                'text': '插件会自动监控本地媒体文件，当检测到新文件时智能上传到CloudDrive2，并通知其他插件处理后续任务（如生成STRM文件）。'
+                                            }
+                                        ]
+                                    },
+                                    
+                                    # 路径映射配置区域
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VCard',
+                                                        'props': {
+                                                            'variant': 'outlined',
+                                                            'color': 'primary'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'VCardTitle',
+                                                                'props': {
+                                                                    'class': 'text-primary d-flex align-center'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'VIcon',
+                                                                        'props': {
+                                                                            'icon': 'mdi-desktop-classic',
+                                                                            'class': 'me-2'
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'text': '本地路径'
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                'component': 'VCardText',
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'VTextField',
+                                                                        'props': {
+                                                                            'model': 'local_media_path',
+                                                                            'label': '本地媒体库路径',
+                                                                            'placeholder': '例如: /media/movies 或 D:\\Movies',
+                                                                            'variant': 'outlined',
+                                                                            'prepend-inner-icon': 'mdi-folder',
+                                                                            'hint': '你的电影、电视剧等媒体文件存放的本地路径',
+                                                                            'persistent-hint': True
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                    'md': 6
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VCard',
+                                                        'props': {
+                                                            'variant': 'outlined',
+                                                            'color': 'success'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'VCardTitle',
+                                                                'props': {
+                                                                    'class': 'text-success d-flex align-center'
+                                                                },
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'VIcon',
+                                                                        'props': {
+                                                                            'icon': 'mdi-cloud',
+                                                                            'class': 'me-2'
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        'component': 'span',
+                                                                        'text': '云端路径'
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                'component': 'VCardText',
+                                                                'content': [
+                                                                    {
+                                                                        'component': 'VTextField',
+                                                                        'props': {
+                                                                            'model': 'cloud_media_path',
+                                                                            'label': 'CloudDrive2目标路径',
+                                                                            'placeholder': '例如: /115/Movies 或 /阿里云盘/电影',
+                                                                            'variant': 'outlined',
+                                                                            'prepend-inner-icon': 'mdi-cloud-upload',
+                                                                            'hint': '文件上传到CloudDrive2后的存储路径',
+                                                                            'persistent-hint': True
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    
+                                    # 路径映射预览
+                                    {
+                                        'component': 'VCard',
+                                        'props': {
                                             'variant': 'outlined',
-                                            'hide-details': True,
-                                            'prepend-inner-icon': 'mdi-cloud'
-                                        }
+                                            'color': 'info',
+                                            'class': 'mt-3'
+                                        },
+                                        'content': [
+                                            {
+                                                'component': 'VCardTitle',
+                                                'props': {
+                                                    'class': 'text-info d-flex align-center'
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VIcon',
+                                                        'props': {
+                                                            'icon': 'mdi-eye-outline',
+                                                            'class': 'me-2'
+                                                        }
+                                                    },
+                                                    {
+                                                        'component': 'span',
+                                                        'text': '路径映射预览'
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VCardText',
+                                                'content': [
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'text-caption mb-2'
+                                                        },
+                                                        'text': '示例文件路径转换:'
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center mb-2'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'VIcon',
+                                                                'props': {
+                                                                    'icon': 'mdi-file-video',
+                                                                    'class': 'me-2',
+                                                                    'size': 'small',
+                                                                    'color': 'primary'
+                                                                }
+                                                            },
+                                                            {
+                                                                'component': 'code',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '/media/movies/复仇者联盟.mp4'
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'text-center my-2'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'VIcon',
+                                                                'props': {
+                                                                    'icon': 'mdi-arrow-down',
+                                                                    'color': 'success'
+                                                                }
+                                                            }
+                                                        ]
+                                                    },
+                                                    {
+                                                        'component': 'div',
+                                                        'props': {
+                                                            'class': 'd-flex align-center'
+                                                        },
+                                                        'content': [
+                                                            {
+                                                                'component': 'VIcon',
+                                                                'props': {
+                                                                    'icon': 'mdi-cloud-upload',
+                                                                    'class': 'me-2',
+                                                                    'size': 'small',
+                                                                    'color': 'success'
+                                                                }
+                                                            },
+                                                            {
+                                                                'component': 'code',
+                                                                'props': {
+                                                                    'class': 'text-caption'
+                                                                },
+                                                                'text': '/115/Movies/复仇者联盟.mp4'
+                                                            }
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     }
                                 ]
                             }
@@ -3200,6 +3701,10 @@ class Cd2Upload(_PluginBase):
             'enable_favorite_notify': self._enable_favorite_notify,
             'softlink_prefix_path': self._softlink_prefix_path,
             'cd_mount_prefix_path': self._cd_mount_prefix_path,
+            # 智能路径配置项
+            'path_config_mode': getattr(self, '_path_config_mode', 'media'),
+            'local_media_path': getattr(self, '_local_media_path', ''),
+            'cloud_media_path': getattr(self, '_cloud_media_path', ''),
             # 企业级配置项
             'enable_enterprise_logging': getattr(self, '_enable_enterprise_logging', True),
             'enable_distributed_lock': getattr(self, '_enable_distributed_lock', True),
