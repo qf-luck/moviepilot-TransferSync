@@ -42,7 +42,7 @@ class Cd2Upload(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/clouddrive.png"
     # 插件版本
-    plugin_version = "2.0.0"
+    plugin_version = "2.1.0"
     # 插件作者
     plugin_author = "honue & enhanced"
     # 作者主页
@@ -62,7 +62,15 @@ class Cd2Upload(_PluginBase):
     _notify_upload = False
     _upload_retry_count = 3
     _cd2_confs = None
-    _strm_plugin_name = None
+    _cloud_media_sync = True
+    _monitor_interval = 10
+    _clean_interval = 20
+    _enable_cookie_check = True
+    _cookie_check_interval = 30
+    _black_dirs = ""
+    _upload_timeout = 300
+    _delete_source_after_upload = False
+    _enable_favorite_notify = True
 
     # 链接前缀
     _softlink_prefix_path = '/strm/'
@@ -105,7 +113,15 @@ class Cd2Upload(_PluginBase):
             self._notify_upload = config.get('notify_upload', False)
             self._upload_retry_count = config.get('upload_retry_count', 3)
             self._cd2_confs = config.get('cd2_confs', '')
-            self._strm_plugin_name = config.get('strm_plugin_name', '')
+            self._cloud_media_sync = config.get('cloud_media_sync', True)
+            self._monitor_interval = config.get('monitor_interval', 10)
+            self._clean_interval = config.get('clean_interval', 20)
+            self._enable_cookie_check = config.get('enable_cookie_check', True)
+            self._cookie_check_interval = config.get('cookie_check_interval', 30)
+            self._black_dirs = config.get('black_dirs', '')
+            self._upload_timeout = config.get('upload_timeout', 300)
+            self._delete_source_after_upload = config.get('delete_source_after_upload', False)
+            self._enable_favorite_notify = config.get('enable_favorite_notify', True)
             self._softlink_prefix_path = config.get('softlink_prefix_path', '/strm/')
             self._cd_mount_prefix_path = config.get('cd_mount_prefix_path', '/CloudNAS/CloudDrive/115/emby/')
 
@@ -149,12 +165,17 @@ class Cd2Upload(_PluginBase):
 
         # 定期清理任务
         self._scheduler.add_job(func=self.clean, kwargs={"cleanlink": False}, trigger='interval', 
-                                minutes=20, name="定期清理检查")
+                                minutes=self._clean_interval, name="定期清理检查")
 
         # 上传监控任务（如果启用）
         if self._monitor_upload and self._cd2_clients:
             self._scheduler.add_job(func=self.monitor_upload_tasks, trigger='interval',
-                                    minutes=10, name="上传任务监控")
+                                    minutes=self._monitor_interval, name="上传任务监控")
+
+        # Cookie过期检测任务
+        if self._enable_cookie_check and self._cd2_clients:
+            self._scheduler.add_job(func=self.check_cookie_status, trigger='interval',
+                                    minutes=self._cookie_check_interval, name="Cookie过期检测")
 
         if self._scheduler.get_jobs():
             self._scheduler.print_jobs()
@@ -170,7 +191,15 @@ class Cd2Upload(_PluginBase):
             'notify_upload': self._notify_upload,
             'upload_retry_count': self._upload_retry_count,
             'cd2_confs': self._cd2_confs,
-            'strm_plugin_name': self._strm_plugin_name,
+            'cloud_media_sync': self._cloud_media_sync,
+            'monitor_interval': self._monitor_interval,
+            'clean_interval': self._clean_interval,
+            'enable_cookie_check': self._enable_cookie_check,
+            'cookie_check_interval': self._cookie_check_interval,
+            'black_dirs': self._black_dirs,
+            'upload_timeout': self._upload_timeout,
+            'delete_source_after_upload': self._delete_source_after_upload,
+            'enable_favorite_notify': self._enable_favorite_notify,
             'softlink_prefix_path': self._softlink_prefix_path,
             'cd_mount_prefix_path': self._cd_mount_prefix_path
         })
@@ -314,9 +343,9 @@ class Cd2Upload(_PluginBase):
                         "strm_path": strm_file_path
                     }
                     
-                    # 如果配置了STRM插件，发送事件；否则直接生成
-                    if self._strm_plugin_name:
-                        self._send_strm_generation_event(file_info)
+                    # 通知Cloud Media Sync处理STRM生成，或直接生成
+                    if self._cloud_media_sync:
+                        self._notify_cloud_media_sync(file_info)
                     else:
                         # 保持原有的直接生成STRM文件逻辑作为备用
                         try:
@@ -404,36 +433,87 @@ class Cd2Upload(_PluginBase):
             mtype=NotificationType.Plugin
         )
 
-    def _send_strm_generation_event(self, file_info: Dict):
-        """发送STRM生成事件"""
-        if not self._strm_plugin_name:
-            logger.info(f"未配置STRM插件名称，跳过事件发送")
+    def _notify_cloud_media_sync(self, file_info: Dict):
+        """通知Cloud Media Sync处理STRM生成"""
+        if not self._cloud_media_sync:
+            logger.info("未启用Cloud Media Sync通知，跳过")
             return
             
-        # 构造事件数据
+        # 构造通知数据
         event_data = {
-            "plugin_name": self.plugin_name,
-            "action": "generate_strm",
+            "source": "CloudDrive2智能上传",
+            "action": "strm_generate_request",
             "file_path": file_info.get("softlink_path"),
-            "cd2_path": file_info.get("cd2_path"),
+            "cloud_path": file_info.get("cd2_path"),
             "strm_path": file_info.get("strm_path"),
-            "target_plugin": self._strm_plugin_name
+            "upload_completed": True,
+            "media_type": file_info.get("media_type", "unknown"),
+            "timestamp": datetime.now().isoformat()
         }
         
-        # 发送自定义事件
-        event = Event(EventType.PluginAction, event_data)
+        # 发送插件通信事件
+        event = Event(EventType.PluginAction, {
+            "plugin_name": "CloudMediaSync",
+            "action": "handle_upload_completion",
+            "data": event_data
+        })
         eventmanager.send_event(event)
         
-        logger.info(f"已发送STRM生成事件到插件：{self._strm_plugin_name}")
+        logger.info(f"已通知Cloud Media Sync处理文件: {file_info.get('softlink_path')}")
+
+    def check_cookie_status(self):
+        """检查CloudDrive2 Cookie状态"""
+        if not self._cd2_clients:
+            return
+            
+        for cd2_name, cd2_client in self._cd2_clients.items():
+            try:
+                logger.info(f"开始检查 {cd2_name} Cookie状态")
+                fs = cd2_client.fs
+                if not fs:
+                    logger.error(f"{cd2_name} CloudDrive2连接失败")
+                    continue
+
+                # 获取目录列表并检查是否可访问
+                for dir_item in fs.listdir():
+                    if dir_item and dir_item not in self._black_dirs.split(","):
+                        try:
+                            cloud_files = fs.listdir(dir_item)
+                            if cloud_files is None:
+                                error_msg = f"云盘 {dir_item} Cookie可能已过期"
+                                logger.warning(error_msg)
+                                if self._notify_upload:
+                                    self.post_message(
+                                        title=f"CloudDrive2 Cookie警告",
+                                        text=f"【{cd2_name}】{error_msg}",
+                                        mtype=NotificationType.Plugin
+                                    )
+                        except Exception as err:
+                            error_msg = f"云盘 {dir_item} 访问异常"
+                            logger.error(f"{error_msg}: {err}")
+                            if "429" in str(err):
+                                error_msg = f"云盘 {dir_item} 访问频率过高，请稍后再试"
+                            if self._notify_upload:
+                                self.post_message(
+                                    title=f"CloudDrive2 Cookie错误",
+                                    text=f"【{cd2_name}】{error_msg}: {err}",
+                                    mtype=NotificationType.Plugin
+                                )
+                            
+            except Exception as e:
+                logger.error(f"检查{cd2_name} Cookie状态失败：{e}")
 
     @eventmanager.register(EventType.WebhookMessage)
     def record_favor(self, event: Event):
         """
-        记录favor剧集
-        event='item.rate' channel='emby' item_type='TV' item_name='幽游白书' item_id=None item_path='/media/series/日韩剧/幽游白书 (2023)' season_id=None episode_id=None tmdb_id='121659' overview='该剧改编自富坚义博的同名漫画。讲述叛逆少年浦饭幽助（北村匠海 饰）为了救小孩不幸车祸身亡，没想到因此获得重生机会并成为灵界侦探，展开一段不可思议的人生。' percentage=None ip=None device_name=None client=None user_name='honue' image_url=None item_favorite=None save_reason=None item_isvirtual=None media_type='Series'
+        记录favorite剧集，支持收藏更新通知
         """
+        # 检查是否启用收藏通知功能
+        if not self._enable_favorite_notify:
+            return
+            
         event_info: WebhookEventInfo = event.event_data
-        # 只处理剧集喜爱
+        # 只处理剧集喜爱事件
         if event_info.event != "item.rate" or event_info.item_type != "TV":
             return
         if event_info.channel != "emby":
@@ -654,11 +734,153 @@ class Cd2Upload(_PluginBase):
                                 },
                                 'content': [
                                     {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'cloud_media_sync',
+                                            'label': '通知Cloud Media Sync',
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enable_cookie_check',
+                                            'label': '启用Cookie检测',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'delete_source_after_upload',
+                                            'label': '上传后删除源文件',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'enable_favorite_notify',
+                                            'label': '启用收藏通知',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
                                         'component': 'VTextField',
                                         'props': {
-                                            'model': 'strm_plugin_name',
-                                            'label': 'STRM生成插件名称',
-                                            'placeholder': '留空则直接生成'
+                                            'model': 'monitor_interval',
+                                            'label': '监控间隔(分钟)',
+                                            'placeholder': '10'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'clean_interval',
+                                            'label': '清理间隔(分钟)',
+                                            'placeholder': '20'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'cookie_check_interval',
+                                            'label': 'Cookie检测间隔(分钟)',
+                                            'placeholder': '30'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'upload_timeout',
+                                            'label': '上传超时(秒)',
+                                            'placeholder': '300'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'black_dirs',
+                                            'label': 'Cookie检测黑名单',
+                                            'placeholder': '目录1,目录2'
                                         }
                                     }
                                 ]
@@ -701,7 +923,7 @@ class Cd2Upload(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '本插件整合了CloudDrive2智能上传、任务监控、事件驱动STRM生成等功能，支持多CD2实例管理。'
+                                            'text': '【CloudDrive2智能上传】整合cd2tool功能，支持智能上传策略、任务监控、Cookie检测、通知Cloud Media Sync处理STRM生成，提供完整的CD2管理解决方案。'
                                         }
                                     }
                                 ]
@@ -719,7 +941,15 @@ class Cd2Upload(_PluginBase):
             'notify_upload': self._notify_upload,
             'upload_retry_count': self._upload_retry_count,
             'cd2_confs': self._cd2_confs,
-            'strm_plugin_name': self._strm_plugin_name,
+            'cloud_media_sync': self._cloud_media_sync,
+            'monitor_interval': self._monitor_interval,
+            'clean_interval': self._clean_interval,
+            'enable_cookie_check': self._enable_cookie_check,
+            'cookie_check_interval': self._cookie_check_interval,
+            'black_dirs': self._black_dirs,
+            'upload_timeout': self._upload_timeout,
+            'delete_source_after_upload': self._delete_source_after_upload,
+            'enable_favorite_notify': self._enable_favorite_notify,
             'softlink_prefix_path': self._softlink_prefix_path,
             'cd_mount_prefix_path': self._cd_mount_prefix_path
         }
